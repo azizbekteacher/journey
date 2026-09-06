@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Journey — The CMO's Quest</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700;900&family=EB+Garamond:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/src/style.css">
+</head>
+<body>
+<div id="app">
+  <canvas id="game"></canvas>
+
+  <div id="hud" class="hidden">
+    <canvas id="minimap" width="164" height="164"></canvas>
+    <div id="hud-left">
+      <div id="hud-hearts">❤❤❤❤❤</div>
+      <div id="hud-gold">🪙 0</div>
+    </div>
+    <div id="hud-stamina"><div id="hud-stamina-fill"></div></div>
+    <div id="hud-right">
+      <div id="hud-progress">📜 0/20</div>
+      <button id="btn-notebook" title="Notebook (Tab)">📓</button>
+    </div>
+    <div id="hud-hint" class="hidden"></div>
+    <div id="hud-zone" class="hidden"></div>
+  </div>
+
+  <div id="toasts"></div>
+
+  <div id="battle" class="overlay hidden">
+    <div class="battle-panel">
+      <div class="battle-head">
+        <span id="b-icon" class="battle-icon">🐀</span>
+        <div class="battle-title">
+          <div id="b-name">Rat Grunt</div>
+          <div id="b-meta">Customer Woods · 1/20</div>
+        </div>
+        <div class="timer-wrap">
+          <svg viewBox="0 0 40 40"><circle class="ring-bg" cx="20" cy="20" r="16"/><circle id="b-ring" class="ring-fg" cx="20" cy="20" r="16"/></svg>
+          <span id="b-clock">1:00</span>
+        </div>
+      </div>
+      <div class="cmo-row">
+        <div class="cmo-avatar">🦉</div>
+        <div class="cmo-bubble">
+          <div class="cmo-name">The Chief Marketing Owl</div>
+          <div id="b-lesson"></div>
+        </div>
+      </div>
+      <div id="b-question"></div>
+      <textarea id="b-input" rows="4" placeholder="Write your answer, founder..."></textarea>
+      <div class="battle-actions">
+        <button id="b-example" class="btn-soft">📜 Example</button>
+        <div id="b-nudge"></div>
+        <button id="b-submit" class="btn-gold">Inscribe Answer ⚔</button>
+      </div>
+      <div id="b-hearts">❤❤❤❤❤</div>
+    </div>
+  </div>
+
+  <div id="notebook" class="hidden">
+    <div class="nb-side">
+      <div class="nb-title">📓 Founder's Notebook</div>
+      <div id="nb-list"></div>
+      <div class="nb-foot">
+        <button id="nb-export" class="btn-soft">Download .md</button>
+        <button id="nb-reset" class="btn-soft danger">Reset Game</button>
+        <button id="nb-close" class="btn-gold">Close (Tab)</button>
+      </div>
+    </div>
+    <div class="nb-main">
+      <input id="nb-entry-title" placeholder="Entry title">
+      <textarea id="nb-entry-text" placeholder="Write freely, founder. This is yours."></textarea>
+      <div id="nb-saved">Saved ✓</div>
+    </div>
+  </div>
+
+  <div id="coin-card" class="hidden">
+    <div class="coin-title" id="coin-title"></div>
+    <div class="coin-tip" id="coin-tip"></div>
+  </div>
+
+  <div id="plan" class="overlay hidden">
+    <div class="plan-panel">
+      <div class="plan-head">
+        <div class="plan-seal">⚜</div>
+        <h2>Quarterly Marketing Plan</h2>
+        <div class="plan-sub">forged by the Chief Marketing Owl from your own words</div>
+      </div>
+      <div id="plan-body"></div>
+      <div class="plan-actions">
+        <button id="plan-notebook" class="btn-soft">📓 Save to Notebook</button>
+        <button id="plan-close" class="btn-gold">Continue the Reign</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="win" class="overlay hidden">
+    <div class="win-panel">
+      <div class="win-crest">⚜ ⚔ ⚜</div>
+      <h1>Marketing Cleared</h1>
+      <div class="win-sub">Level I — The CMO's Quest</div>
+      <div id="win-stats"></div>
+      <p class="win-text">The Bull Market bows. Your notebook now holds a true quarterly plan,<br>built from twenty honest answers. Level II awaits, founder.</p>
+      <button id="win-close" class="btn-gold">Rule On</button>
+    </div>
+  </div>
+
+  <div id="title" class="overlay">
+    <div class="title-inner">
+      <div class="title-crest">⚜</div>
+      <h1>JOURNEY</h1>
+      <div class="title-sub">The CMO's Quest · Level I — Marketing</div>
+      <p class="title-story">You are the founder-CEO of an online English school for Uzbek learners —
+        a knight in a fairy-tale kingdom. The Chief Marketing Owl waits in Founder's Hollow,
+        ready to forge your quarterly marketing plan. But first he must know everything about you.
+        Twenty guardians hold twenty questions. Ride out. Answer honestly. The Bull Market guards the gate.</p>
+      <div class="title-controls">
+        <span><b>WASD</b> ride</span><span><b>Mouse</b> look</span><span><b>LMB</b> attack</span><span><b>RMB</b> defend</span>
+        <span><b>Shift</b> sprint</span><span><b>C</b> roll</span><span><b>E</b> answer (after knockdown)</span><span><b>H</b> horse (7/20)</span><span><b>Tab</b> notebook</span><span><b>Space</b> also attacks</span>
+      </div>
+      <button id="btn-begin" class="btn-gold big">Begin the Quest</button>
+    </div>
+  </div>
+
+  <div id="banner" class="hidden">MARKETING CLEARED</div>
+  <div id="fade"></div>
+  <div id="vignette"></div>
+  <div id="whiteflash"></div>
+  <button id="audio-toggle" title="Sound on/off">♪</button>
+</div>
+<script>
+// Fallback: ensure Begin works even if module fails — runs immediately
+(function(){
+  var btn = document.getElementById('btn-begin');
+  var title = document.getElementById('title');
+  var hud = document.getElementById('hud');
+  if(!btn||!title) return;
+  function begin(){
+    title.classList.add('hidden');
+    if(hud) hud.classList.remove('hidden');
+    // try to unlock audio / notify module if it loaded
+    window.dispatchEvent(new CustomEvent('fallback-begin'));
+  }
+  btn.addEventListener('click', begin);
+  // also capture in case module's listener failed to attach because of early throw
+  title.addEventListener('click', function(e){
+    if(e.target===title) begin();
+  });
+})();
+window.addEventListener('error', function(e){
+  var t=document.getElementById('toasts');
+  if(!t) return;
+  var d=document.createElement('div');
+  d.className='toast';
+  d.style.background='#a63a2e'; d.style.color='#fff';
+  d.textContent='Error: '+(e.message||e.error||'unknown');
+  t.appendChild(d);
+});
+window.addEventListener('unhandledrejection', function(e){
+  var t=document.getElementById('toasts');
+  if(!t) return;
+  var d=document.createElement('div');
+  d.className='toast';
+  d.style.background='#a63a2e'; d.style.color='#fff';
+  d.textContent='Error: '+(e.reason&&e.reason.message||e.reason||'promise');
+  t.appendChild(d);
+});
+</script>
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>
