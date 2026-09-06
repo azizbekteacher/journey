@@ -59,7 +59,7 @@ scene.add(hemi)
 const sun = new THREE.DirectionalLight("#ffd9a0", 1.5)
 sun.position.set(-60, 80, 70)
 sun.castShadow = true
-sun.shadow.mapSize.set(4096, 4096)
+sun.shadow.mapSize.set(2048, 2048)
 sun.shadow.camera.left = -45
 sun.shadow.camera.right = 45
 sun.shadow.camera.top = 45
@@ -74,6 +74,7 @@ sunFill.position.set(80, 40, -60)
 scene.add(sunFill)
 
 let skyObj = null
+let shadowFrame = 0
 const composer = new EffectComposer(renderer)
 composer.addPass(new RenderPass(scene, camera))
 const gtao = new GTAOPass(scene, camera, innerWidth, innerHeight, undefined,
@@ -88,6 +89,10 @@ gtao.render = (r, wb, rb, dt, ma) => {
   try { _gtaoRender(r, wb, rb, dt, ma) } finally { skyObj.visible = true }
 }
 composer.addPass(gtao)
+// GTAO re-renders the whole scene into its own GBuffer every frame — too heavy
+// for integrated GPUs. Off by default; re-enable in console:
+//   __game.composer.passes.find(p => p.isEnabled)?.constructor // or: passes[1].enabled = true
+gtao.enabled = false
 const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.32, 0.6, 0.85)
 composer.addPass(bloom)
 const _pr = renderer.getPixelRatio()

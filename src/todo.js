@@ -11,6 +11,7 @@
 //   - offline / production fallback mirrors to localStorage and re-syncs later.
 
 import { VAULT_BASE } from "./net.js"
+import { generateSubtasks, streamExploreChat, buildExploreSystem, buildVaultDigest } from "./taskAI.js"
 
 const FILE = "Tasks.md"
 const BACKUP_KEY = "journey_tasks_v1"
@@ -246,7 +247,51 @@ const led = {
   app: null,
   onTick: null,                 // (taskNode, done) — main uses to kill enemies
   onChanged: null,              // after model edits (badge refresh)
-  initialized: false
+  initialized: false,
+  aiBusy: new Set(),            // task ids with an AI-subtask request in flight
+  exploringId: null,            // task id with the Explore sidebar open
+  exStreaming: false,           // an Explore reply is streaming
+}
+
+const EXPLORE_KEY = "journey_explore_v1"
+const EX_MAX = 30
+
+// Task uids regenerate on every parse, so Explore history is keyed by a
+// stable signature (section + title) that survives reloads + vault polling.
+function exploreSig(task, secTitle) {
+  const t = String(task?.title || "untitled").trim().toLowerCase().slice(0, 80)
+  const s = String(secTitle || "").trim().toLowerCase().slice(0, 60)
+  return s + "::" + t
+}
+function loadExploreMap() {
+  try {
+    const raw = localStorage.getItem(EXPLORE_KEY)
+    const o = raw ? JSON.parse(raw) : {}
+    return o && typeof o === "object" ? o : {}
+  } catch (e) { return {} }
+}
+function saveExploreMap(m) {
+  try {
+    const keys = Object.keys(m).slice(-80)
+    const slim = {}
+    for (const k of keys) slim[k] = Array.isArray(m[k]) ? m[k].slice(-EX_MAX) : []
+    localStorage.setItem(EXPLORE_KEY, JSON.stringify(slim))
+  } catch (e) {}
+}
+function sectionTitleOfTask(id) {
+  for (const sec of led.sections) {
+    for (const c of sec.children) {
+      if (c.kind !== "task") continue
+      if (c.id === id) return sec.title || ""
+      const stack = [...c.subs]
+      while (stack.length) {
+        const n = stack.pop()
+        if (n.id === id) return sec.title || ""
+        for (const s of n.subs) stack.push(s)
+      }
+    }
+  }
+  return ""
 }
 
 // ------------------------------------------------------------- data ops ----
@@ -348,7 +393,23 @@ async function reloadFromServer(silent = true) {
     const text = typeof r.content === "string" ? r.content : ""
     const wasEditing = led.editingId
     const openEditing = led.editingId && taskById(led.editingId)
+    const exTask = led.exploringId && taskById(led.exploringId)
+    const exSig = exTask ? exploreSig(exTask, sectionTitleOfTask(exTask.id)) : null
     led.sections = parseMarkdown(text)
+    if (exSig) {
+      let newId = null
+      for (const sec of led.sections) {
+        const stack = sec.children.filter((c) => c.kind === "task")
+        while (stack.length && !newId) {
+          const n = stack.pop()
+          if (exploreSig(n, sec.title || "") === exSig) { newId = n.id; break }
+          for (const s of n.subs) stack.push(s)
+        }
+        if (newId) break
+      }
+      led.exploringId = newId
+      if (!newId) led.exStreaming = false
+    }
     led._serverMtime = r.mtime ?? null
     led.dirty = false
     led.editingId = openEditing ? openEditing.id : null
@@ -433,6 +494,7 @@ const CHECK_HTML = '<svg viewBox="0 0 16 16"><path d="M3 8.5 L6.5 12 L13 4.5" fi
 function buildDom() {
   const app = document.createElement("div")
   app.id = "todo-app"
+  app.className = "todo-app"
   app.innerHTML = `
     <div class="ta-bar">
       <button class="ta-new btn-gold" data-act="add">＋ New deed</button>
@@ -442,9 +504,14 @@ function buildDom() {
       </div>
       <div class="ta-hint"></div>
     </div>
-    <div class="ta-addbox" id="ta-addbox"></div>
-    <div class="ta-editor" id="ta-editor"></div>
-    <div class="ta-scroll"><div class="ta-body" id="ta-body"></div></div>
+    <div class="ta-layout">
+      <div class="ta-main">
+        <div class="ta-addbox" id="ta-addbox"></div>
+        <div class="ta-editor" id="ta-editor"></div>
+        <div class="ta-scroll"><div class="ta-body" id="ta-body"></div></div>
+      </div>
+      <aside class="ta-explore hidden" id="ta-explore" aria-label="Explore this deed"></aside>
+    </div>
     <div class="ta-footer"><span id="todo-pill-inline" data-state="synced">● Tasks.md</span>
       <span class="ta-footnote">source of truth: C:\\Users\\bluep\\Azizbek\\Tasks.md</span></div>
   `
@@ -534,6 +601,9 @@ function taskRowHtml(t, depth) {
     ? `<div class="tl-nest${collapsed ? " hidden" : ""}" data-parent="${t.id}">${t.subs.map((s) => taskRowHtml(s, depth + 1)).join("")}</div>` : ""
   const dueMeta = t.due ? `<div class="tl-duerow">${metaChipsHtml(t)}</div>` : ""
   const dots = t.done ? " tl-done" : ""
+  const busy = led.aiBusy.has(t.id)
+  const aiBtn = `<button class="tl-ai${busy ? " busy" : ""}" data-act="aisub" data-id="${t.id}" title="AI subtask — break into steps using your Obsidian vault" ${busy ? "disabled" : ""}>${busy ? "◌" : "✨"}</button>`
+  const exBtn = `<button class="tl-ex${led.exploringId === t.id ? " on" : ""}" data-act="explore" data-id="${t.id}" title="Explore — talk through what blocks you on this deed">🧭</button>`
   return `
   <div class="tl-row${dots}" data-id="${t.id}" data-depth="${depth}" data-root="${t.root ? 1 : 0}" ${t.root ? 'draggable="true"' : ""}>
     ${caret}
@@ -546,6 +616,7 @@ function taskRowHtml(t, depth) {
       ${dueMeta}
       ${t.desc && !t.done ? `<div class="tl-desc">${esc(t.desc)}</div>` : ""}
     </div>
+    ${aiBtn}${exBtn}
     <button class="tl-del" data-act="del" data-id="${t.id}" title="Delete">🗑</button>
   </div>${subRow}`
 }
@@ -631,7 +702,11 @@ function cardHtml(t) {
         <div class="bd-card-meta">${metaChipsHtml(t, false)}${t.due && !t.done && t.due < todayStr() ? `<span class="chip due overdue">📅 overdue</span>` : ""}
           ${t.subs.length ? `<span class="chip cnt">${cc.done}/${cc.total}</span>` : ""}</div>
       </div>
-      <button class="tl-del" data-act="del" data-id="${t.id}">🗑</button>
+      <div class="bd-card-btns">
+        <button class="tl-ai${led.aiBusy.has(t.id) ? " busy" : ""}" data-act="aisub" data-id="${t.id}" title="AI subtask — break into steps using your Obsidian vault" ${led.aiBusy.has(t.id) ? "disabled" : ""}>${led.aiBusy.has(t.id) ? "◌" : "✨"}</button>
+        <button class="tl-ex${led.exploringId === t.id ? " on" : ""}" data-act="explore" data-id="${t.id}" title="Explore — talk through what blocks you">🧭</button>
+        <button class="tl-del" data-act="del" data-id="${t.id}">🗑</button>
+      </div>
     </div>
     ${t.desc && !t.done ? `<div class="bd-card-desc">${esc(t.desc)}</div>` : ""}
     ${subRows}
@@ -692,7 +767,10 @@ function renderEditor() {
         </select></label>` : ""}
       </div>
       <div class="ta-edit-subs">
-        <div class="ta-subs-title">Steps ${t.subs.length ? `(${t.subs.filter((s) => s.done).length}/${t.subs.length})` : ""}</div>
+        <div class="ta-subs-title">Steps ${t.subs.length ? `(${t.subs.filter((s) => s.done).length}/${t.subs.length})` : ""}
+          <button class="tl-ai inline" data-act="aisub" data-id="${t.id}" title="AI subtask — break into steps using your Obsidian vault" ${led.aiBusy.has(t.id) ? "disabled" : ""}>${led.aiBusy.has(t.id) ? "◌ thinking…" : "✨ AI subtask"}</button>
+          <button class="tl-ex inline${led.exploringId === t.id ? " on" : ""}" data-act="explore" data-id="${t.id}" title="Explore — talk through what blocks you">🧭 Explore</button>
+        </div>
         <div class="ta-subs-list">
           ${t.subs.length ? t.subs.map((s) => `
             <div class="ta-sub ${s.done ? "done" : ""}" data-id="${s.id}">
@@ -768,6 +846,7 @@ function deleteTask(id) {
 }
 function finishDelete(id) {
   if (led.editingId === id) led.editingId = null
+  if (led.exploringId === id) { led.exploringId = null; led.exStreaming = false }
   markChanged(true)
   render()
 }
@@ -821,6 +900,150 @@ function reorderInSection(secId, taskId, beforeId) {
   return moveRootTo(secId, taskId, false, beforeId)
 }
 
+// ------------------------------------------------- AI subtask + Explore ----
+
+function exploreMsgsFor(task) {
+  const m = loadExploreMap()
+  const sig = exploreSig(task, sectionTitleOfTask(task.id))
+  const arr = m[sig]
+  return Array.isArray(arr) ? arr : []
+}
+function storeExploreMsgs(task, msgs) {
+  const m = loadExploreMap()
+  m[exploreSig(task, sectionTitleOfTask(task.id))] = msgs.slice(-EX_MAX)
+  saveExploreMap(m)
+}
+
+async function handleAISub(taskId) {
+  const t = taskById(taskId)
+  if (!t || led.aiBusy.has(taskId)) return
+  led.aiBusy.add(taskId)
+  render()
+  try {
+    const secTitle = sectionTitleOfTask(taskId)
+    const steps = await generateSubtasks({ title: t.title, desc: t.desc, subs: t.subs }, secTitle)
+    const have = new Set([String(t.title || "").toLowerCase().trim()])
+    const walk = (n) => { have.add(String(n.title || "").toLowerCase().trim()); for (const s of n.subs) walk(s) }
+    walk(t)
+    const fresh = steps.map((s) => String(s).trim()).filter((s) => s && !have.has(s.toLowerCase())).slice(0, 5)
+    if (!fresh.length) {
+      toast("✨ Nothing new — your steps already cover it")
+    } else {
+      for (const s of fresh) {
+        t.subs.push({ kind: "task", id: uid(), root: false, depth: t.depth + 1, done: false, title: s, due: null, pri: null, desc: "", subs: [] })
+        have.add(s.toLowerCase())
+      }
+      led.taskCollapsed.delete(t.id)
+      markChanged(true)
+      toast(`✨ ${fresh.length} step${fresh.length === 1 ? "" : "s"} added from your vault context`)
+    }
+  } catch (e) {
+    toast("⚠ AI subtask failed: " + String(e.message || e).slice(0, 160))
+  } finally {
+    led.aiBusy.delete(taskId)
+    render()
+  }
+}
+
+function openExplore(taskId) {
+  if (led.active === "battle") { toast("Open the Ledger (T) to Explore a deed"); return }
+  const t = taskById(taskId)
+  if (!t) return
+  led.exploringId = taskId
+  led.editingId = led.editingId || null
+  const msgs = exploreMsgsFor(t)
+  if (!msgs.length) {
+    const seed = [{ role: "assistant", content: `What about “${t.title || "this deed"}” feels heaviest right now — unclear, too big, or just off-putting?` }]
+    storeExploreMsgs(t, seed)
+  }
+  render()
+  setTimeout(() => { document.getElementById("ta-ex-input")?.focus() }, 60)
+}
+function closeExplore() {
+  led.exploringId = null
+  led.exStreaming = false
+  render()
+}
+
+async function sendExplore(text) {
+  const t = led.exploringId ? taskById(led.exploringId) : null
+  if (!t || led.exStreaming) return
+  const clean = String(text || "").trim()
+  if (!clean) return
+  const msgs = exploreMsgsFor(t)
+  msgs.push({ role: "user", content: clean })
+  storeExploreMsgs(t, msgs)
+  led.exStreaming = true
+  renderExplore()
+  const input = document.getElementById("ta-ex-input")
+  if (input) input.value = ""
+  let acc = ""
+  const paneMsgs = () => document.getElementById("ta-ex-msgs")
+  try {
+    const digest = await buildVaultDigest().catch(() => "")
+    const secTitle = sectionTitleOfTask(t.id)
+    const system = buildExploreSystem({ title: t.title, desc: t.desc, subs: t.subs }, secTitle, digest)
+    const history = msgs.slice(-12).map((m) => ({ role: m.role, content: m.content }))
+    await streamExploreChat([{ role: "system", content: system }, ...history], (tok) => {
+      acc += tok
+      const el = paneMsgs()
+      if (el) {
+        const last = el.querySelector(".ta-ex-stream")
+        if (last) last.innerHTML = esc(acc) + '<span class="ai-caret">▍</span>'
+        el.scrollTop = el.scrollHeight
+      }
+    })
+  } catch (e) {
+    acc = acc || ("⚠ " + String(e.message || e).slice(0, 180))
+  }
+  const finalMsgs = exploreMsgsFor(t)
+  finalMsgs.push({ role: "assistant", content: acc.trim() || "(no reply)" })
+  storeExploreMsgs(t, finalMsgs.slice(-EX_MAX))
+  led.exStreaming = false
+  render()
+}
+
+function renderExplore() {
+  const pane = document.getElementById("ta-explore")
+  if (!pane) return
+  // Battle embed stays single-column — Explore lives in the full Ledger only.
+  // (exploringId is retained so reopening the overlay restores the sidebar.)
+  const t = led.active === "battle" ? null : (led.exploringId ? taskById(led.exploringId) : null)
+  const panel = document.querySelector("#todo .todo-panel")
+  if (!t) {
+    pane.classList.add("hidden")
+    pane.innerHTML = ""
+    led.app?.classList.remove("has-explore")
+    panel?.classList.remove("wide")
+    return
+  }
+  pane.classList.remove("hidden")
+  led.app?.classList.add("has-explore")
+  panel?.classList.add("wide")
+  const msgs = exploreMsgsFor(t)
+  const lastAssistant = [...msgs].reverse().find((m) => m.role === "assistant")
+  pane.innerHTML = `
+    <div class="ta-ex-head">
+      <div class="ta-ex-title" title="${aesc(t.title || "")}">🧭 ${esc((t.title || "untitled").slice(0, 60))}</div>
+      <button class="ta-ex-x" data-act="ex-close" title="Close Explore">✕</button>
+    </div>
+    <div class="ta-ex-sub">One question at a time — find what's blocking you.</div>
+    <div class="ta-ex-msgs" id="ta-ex-msgs">
+      ${msgs.map((m) => m.role === "user"
+        ? `<div class="ta-ex-row user"><div class="ta-ex-bub user">${esc(m.content)}</div></div>`
+        : `<div class="ta-ex-row coach"><div class="ta-ex-bub coach">${esc(m.content)}</div></div>`).join("")}
+      ${led.exStreaming ? `<div class="ta-ex-row coach"><div class="ta-ex-bub coach ta-ex-stream"><span class="ai-think">…</span></div></div>` : ""}
+    </div>
+    <div class="ta-ex-compose">
+      <textarea id="ta-ex-input" rows="2" placeholder="Reply in one line…" ${led.exStreaming ? "disabled" : ""}></textarea>
+      <button class="btn-gold ta-ex-send" data-act="ex-send" ${led.exStreaming ? "disabled" : ""}>Send</button>
+    </div>
+    <button class="btn-soft ta-ex-add" data-act="ex-addsub" title="Add the coach's last reply as a subtask" ${!lastAssistant || led.exStreaming ? "disabled" : ""}>＋ Add last answer as subtask</button>
+  `
+  const box = pane.querySelector("#ta-ex-msgs")
+  if (box) box.scrollTop = box.scrollHeight
+}
+
 function render() {
   if (!led.app) return
   const body = document.getElementById("ta-body")
@@ -843,6 +1066,7 @@ function render() {
   const addBtn = led.app.querySelector(".ta-new")
   if (addBtn) addBtn.textContent = led.view === "board" ? "＋ New deed" : "＋ New deed"
   // column header extra new button labels handled by renderers
+  renderExplore()
   bindDnD(body)
 }
 
@@ -902,6 +1126,28 @@ function bindAppEvents() {
       }
       case "edit-close": led.editingId = null; render(); break
       case "subadd-ok": addSubtask(id, document.getElementById("ed-newsub")?.value || ""); break
+      case "aisub": handleAISub(id); break
+      case "explore":
+        if (led.exploringId === id) closeExplore()
+        else openExplore(id)
+        break
+      case "ex-close": closeExplore(); break
+      case "ex-send": {
+        const v = document.getElementById("ta-ex-input")?.value || ""
+        sendExplore(v)
+        break
+      }
+      case "ex-addsub": {
+        const t = led.exploringId ? taskById(led.exploringId) : null
+        if (!t) break
+        const msgs = exploreMsgsFor(t)
+        const last = [...msgs].reverse().find((m) => m.role === "assistant")
+        if (last) {
+          const line = String(last.content).split(/\r?\n/).map((s) => s.trim()).filter(Boolean).pop() || last.content
+          addSubtask(t.id, line.slice(0, 140))
+        }
+        break
+      }
       default: break
     }
   })
@@ -912,6 +1158,14 @@ function bindAppEvents() {
   // view toggle
   app.querySelectorAll(".ta-vb").forEach((b) => {
     b.addEventListener("click", () => { led.view = b.dataset.view; led.editingId = null; render() })
+  })
+  // Explore composer: Enter sends, Shift+Enter newline
+  app.addEventListener("keydown", (e) => {
+    if (e.target && e.target.id === "ta-ex-input" && e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault()
+      e.stopPropagation()
+      sendExplore(e.target.value || "")
+    }
   })
 }
 

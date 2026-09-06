@@ -593,18 +593,94 @@ function buildKnight() {
   return g
 }
 
+// --- GLTF character path (Phase 3): falls back to procedural when assets missing ---
+const KNIGHT_YAW = Math.PI
+const HORSE_YAW = Math.PI
+
+function normalizeGLTF(clone, targetH) {
+  const bb = new THREE.Box3().setFromObject(clone)
+  const h = Math.max(0.001, bb.max.y - bb.min.y)
+  clone.scale.setScalar(targetH / h)
+  bb.setFromObject(clone)
+  clone.position.y -= bb.min.y
+}
+
+function findBone(root, side) {
+  let found = null
+  root.traverse((o) => {
+    if (found || !o.isBone) return
+    const n = o.name.toLowerCase().replace(/[^a-z]/g, "")
+    if (/hand|palm|wrist/.test(n)) {
+      if (side > 0 ? /right|r$/.test(n) : /left|l$/.test(n)) found = o
+    }
+  })
+  return found
+}
+
+function buildKnightGLTF(A) {
+  const g = new THREE.Group()
+  const clone = A.model("knight")
+  normalizeGLTF(clone, 2.75)
+  // SkinnedMesh bounding spheres don't follow posed bones — disable culling or the body vanishes
+  clone.traverse((o) => { if (o.isMesh) o.frustumCulled = false })
+  const inner = new THREE.Group()
+  inner.rotation.y = Math.PI
+  inner.add(clone)
+  g.add(inner)
+  const G = { mixer: new THREE.AnimationMixer(clone), clips: A.clips("knight") || { attacks: [] }, actions: {}, cur: null }
+  // attach procedural sword + shield to hand bones (model ships weaponless)
+  const handR = findBone(clone, 1)
+  const handL = findBone(clone, -1)
+  const proc = buildKnight()
+  const sword = proc.userData.sword
+  const shield = proc.userData.shield
+  if (handR) { sword.position.set(0, 0, 0); sword.rotation.set(0, 0, 0); handR.add(sword) }
+  else { sword.position.set(0.5, 1.1, -0.2); g.add(sword) }
+  if (handL) { shield.position.set(0, -0.1, 0.12); handL.add(shield) }
+  g.userData.gltf = G
+  g.userData.parts = null
+  return g
+}
+
+function buildHorseGLTF(A) {
+  const g = new THREE.Group()
+  const clone = A.model("horse")
+  const bb = new THREE.Box3().setFromObject(clone)
+  const h = Math.max(0.001, bb.max.y - bb.min.y)
+  clone.scale.setScalar(3.1 / h)
+  bb.setFromObject(clone)
+  clone.position.y -= bb.min.y
+  clone.traverse((o) => { if (o.isMesh) o.frustumCulled = false })
+  const inner = new THREE.Group()
+  inner.rotation.y = HORSE_YAW
+  inner.add(clone)
+  g.add(inner)
+  g.userData.gltf = { mixer: new THREE.AnimationMixer(clone), clips: A.clips("horse") || {}, actions: {}, cur: null, height: 3.1 }
+  g.userData.legs = null
+  g.visible = false
+  return g
+}
+
 
 export class Player {
-  constructor(scene, camera, fx) {
+  constructor(scene, camera, fx, A = null) {
     this.camera = camera
     this.fx = fx
     this.group = new THREE.Group()
-    this.knight = buildKnight()
-    this.horse = buildHorse()
+    this.knightGltf = !!(A && A.model("knight"))
+    this.horseGltf = !!(A && A.model("horse"))
+    this.knight = this.knightGltf ? buildKnightGLTF(A) : buildKnight()
+    this.horse = this.horseGltf ? buildHorseGLTF(A) : buildHorse()
     this.group.add(this.knight)
     this.group.add(this.horse)
     this.group.position.set(0, 0, 18)
     scene.add(this.group)
+
+    this.knightSeatY = 1.15
+    if (this.knightGltf && this.horseGltf) {
+      const hh = this.horse.userData.gltf.height || 3.1
+      this.knightSeatY = Math.max(0.35, hh * 0.58 - 1.05)
+    }
 
     this.yaw = 0
     this.camYaw = 0
@@ -684,7 +760,7 @@ export class Player {
     }
     this.mounted = !this.mounted
     this.horse.visible = this.mounted
-    this.knight.position.y = this.mounted ? 1.15 : 0
+    this.knight.position.y = this.mounted ? this.knightSeatY : 0
     if (this.mounted) { audio.gallop(); window.dispatchEvent(new CustomEvent("toast", { detail: "\ud83d\udc0e You mount Thunder! Ride, founder!" })) }
   }
 
@@ -794,6 +870,60 @@ export class Player {
   playVictory() { this.victoryT = 0 }
   playHurt() { this.hurtT = 0 }
 
+  animAction(G, key, clip, loop = true) {
+    if (!clip) return null
+    let a = G.actions[key]
+    if (!a) {
+      a = G.mixer.clipAction(clip)
+      a.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce)
+      if (!loop) a.clampWhenFinished = true
+      G.actions[key] = a
+    }
+    if (G.cur !== a) {
+      a.reset()
+      if (G.cur) a.crossFadeFrom(G.cur, 0.16, false)
+      a.play()
+      G.cur = a
+    }
+    a.timeScale = 1
+    a.paused = false
+    return a
+  }
+
+  driveKnight(dt, moving, sprint) {
+    const G = this.knight.userData.gltf
+    if (!G) return
+    const c = G.clips
+    if (this.attackT >= 0 && c.attacks && c.attacks.length) {
+      const i = this.comboIdx % c.attacks.length
+      const clip = c.attacks[i]
+      const a = this.animAction(G, "atk" + i, clip, false)
+      if (a) { a.paused = true; a.time = Math.min(0.999, this.attackT / this.swingDur) * clip.duration }
+    } else if (this.execT >= 0 && c.attacks && c.attacks.length) {
+      const clip = c.attacks[c.attacks.length - 1]
+      const a = this.animAction(G, "exec", clip, false)
+      if (a) { a.paused = true; a.time = Math.min(0.999, this.execT / 0.85) * clip.duration }
+    } else if (this.rollT >= 0 && c.roll) {
+      const a = this.animAction(G, "roll", c.roll, false)
+      if (a) { a.paused = true; a.time = Math.min(0.999, this.rollT / this.rollDur) * c.roll.duration }
+    } else if (moving) {
+      if (sprint) this.animAction(G, "run", c.run || c.walk)
+      else this.animAction(G, "walk", c.walk || c.run)
+    } else {
+      this.animAction(G, "idle", c.idle)
+    }
+    G.mixer.update(dt)
+  }
+
+  driveHorse(dt, moving) {
+    const G = this.horse.userData.gltf
+    if (!G) return
+    const c = G.clips
+    if (moving) this.animAction(G, "gallop", c.run || c.walk)
+    else this.animAction(G, "hidle", c.idle)
+    G.mixer.update(dt)
+  }
+
   update(dt) {
     const battleOpen = !document.getElementById("battle").classList.contains("hidden")
     const planOpen = !document.getElementById("plan").classList.contains("hidden")
@@ -838,15 +968,15 @@ export class Player {
       const rt = this.rollT / this.rollDur
       if (rt >= 1) {
         this.rollT = -1
-        this.knight.rotation.x = 0
-        this.knight.position.y = this.mounted ? 1.15 : 0
+        if (!this.knightGltf) this.knight.rotation.x = 0
+        this.knight.position.y = this.mounted ? this.knightSeatY : 0
       } else {
         const k = 1 - Math.pow(1 - rt, 2)
         const rspd = 15 * (1 - rt * 0.55)
         this.group.position.x += this.rollDir.x * rspd * dt
         this.group.position.z += this.rollDir.z * rspd * dt
-        this.knight.rotation.x = -rt * Math.PI * 2
-        this.knight.position.y = this.mounted ? 1.15 : Math.sin(rt * Math.PI) * 0.35
+        if (!this.knightGltf) this.knight.rotation.x = -rt * Math.PI * 2
+        this.knight.position.y = this.mounted ? this.knightSeatY : Math.sin(rt * Math.PI) * 0.35
         if (Math.random() < dt * 24) this.fx.burst("dust", this.group.position.x, this.group.position.y + 0.05, this.group.position.z, 1)
       }
     }
@@ -897,12 +1027,16 @@ export class Player {
     const p = this.knight.userData.parts
     const w = Math.sin(this.walkT)
     this.idleT = (this.idleT || 0) + dt
-    this.knight.scale.y = this.rollT >= 0 ? 1 : (moving ? 1 : 1 + Math.sin(this.idleT * 2.2) * 0.008)
-    p.legL.rotation.x = this.rollT >= 0 ? 0.5 : (moving ? w * 0.7 : 0)
-    p.legR.rotation.x = this.rollT >= 0 ? -0.5 : (moving ? -w * 0.7 : 0)
-    p.armL.rotation.y = 0
-    p.armL.rotation.z = 0
-    p.armL.rotation.x = moving ? -w * 0.5 : 0
+    if (!p) {
+      this.driveKnight(dt, moving, sprint)
+    } else {
+      this.knight.scale.y = this.rollT >= 0 ? 1 : (moving ? 1 : 1 + Math.sin(this.idleT * 2.2) * 0.008)
+      p.legL.rotation.x = this.rollT >= 0 ? 0.5 : (moving ? w * 0.7 : 0)
+      p.legR.rotation.x = this.rollT >= 0 ? -0.5 : (moving ? -w * 0.7 : 0)
+      p.armL.rotation.y = 0
+      p.armL.rotation.z = 0
+      p.armL.rotation.x = moving ? -w * 0.5 : 0
+    }
 
     if (this.attackT >= 0) {
       this.attackT += dt
@@ -915,9 +1049,11 @@ export class Player {
       }
       if (t >= 1) {
         this.attackT = -1
-        p.armR.rotation.x = 0
-        p.armR.rotation.z = 0
-        this.knight.rotation.y = 0
+        if (p) {
+          p.armR.rotation.x = 0
+          p.armR.rotation.z = 0
+          this.knight.rotation.y = 0
+        }
         if (this.attackQueued) {
           this.attackQueued = false
           this.comboIdx = (this.comboIdx + 1) % 3
@@ -925,7 +1061,7 @@ export class Player {
         } else {
           this.comboIdx = 0
         }
-      } else {
+      } else if (p) {
         this.applySwingPose(t)
       }
     } else if (this.execT >= 0) {
@@ -933,26 +1069,31 @@ export class Player {
       const t = this.execT / 0.85
       if (t >= 1) {
         this.execT = -1
-        p.armR.rotation.x = 0
-        p.armR.rotation.z = 0
-      } else if (t < 0.3) {
-        p.armR.rotation.x = -3.1 * (t / 0.3)
-        p.armR.rotation.z = 0
-      } else if (t < 0.55) {
-        p.armR.rotation.x = -3.1 + 4.0 * ((t - 0.3) / 0.25)
-      } else {
-        p.armR.rotation.x = 0.9 - 0.9 * ((t - 0.55) / 0.45)
+        if (p) {
+          p.armR.rotation.x = 0
+          p.armR.rotation.z = 0
+        }
+      } else if (p) {
+        if (t < 0.3) {
+          p.armR.rotation.x = -3.1 * (t / 0.3)
+          p.armR.rotation.z = 0
+        } else if (t < 0.55) {
+          p.armR.rotation.x = -3.1 + 4.0 * ((t - 0.3) / 0.25)
+        } else {
+          p.armR.rotation.x = 0.9 - 0.9 * ((t - 0.55) / 0.45)
+        }
       }
     } else if (this.victoryT >= 0) {
       this.victoryT += dt
-      p.armR.rotation.x = -2.6
+      if (p) p.armR.rotation.x = -2.6
       if (this.victoryT > 1.6) { this.victoryT = -1 }
     } else if (this.rollT >= 0) {
-      p.armR.rotation.x = -0.9
-      p.armR.rotation.z = 0.4
+      if (p) { p.armR.rotation.x = -0.9; p.armR.rotation.z = 0.4 }
     } else {
-      p.armR.rotation.x = moving ? w * 0.5 : 0
-      p.armR.rotation.z = 0
+      if (p) {
+        p.armR.rotation.x = moving ? w * 0.5 : 0
+        p.armR.rotation.z = 0
+      }
     }
     if (this.hurtT >= 0) {
       this.hurtT += dt
@@ -960,26 +1101,31 @@ export class Player {
       if (this.hurtT > 0.45) { this.hurtT = -1; this.knight.rotation.z = 0 }
     }
     const cape = this.knight.userData.cape
-    cape.rotation.x = 0.15 + Math.sin(this.walkT * 0.9) * 0.1 + (moving ? 0.25 : 0)
-    const capeGeo = cape.geometry
-    const cp = capeGeo.attributes.position
-    const base = cape.userData.base
-    const windAmt = (moving ? 0.09 : 0.035) + (sprint ? 0.05 : 0)
-    for (let i = 0; i < cp.count; i++) {
-      const bx = base[i * 3], by = base[i * 3 + 1]
-      const hang = Math.max(0, (0.575 - by) / 1.15)
-      cp.setZ(i,
-        Math.sin(this.idleT * 3.1 + bx * 4.2 + by * 2.4) * windAmt * hang
-        + Math.sin(this.walkT * 1.8 + bx * 3) * (moving ? 0.05 : 0.015) * hang)
+    if (cape) {
+      cape.rotation.x = 0.15 + Math.sin(this.walkT * 0.9) * 0.1 + (moving ? 0.25 : 0)
+      const capeGeo = cape.geometry
+      const cp = capeGeo.attributes.position
+      const base = cape.userData.base
+      const windAmt = (moving ? 0.09 : 0.035) + (sprint ? 0.05 : 0)
+      for (let i = 0; i < cp.count; i++) {
+        const bx = base[i * 3], by = base[i * 3 + 1]
+        const hang = Math.max(0, (0.575 - by) / 1.15)
+        cp.setZ(i,
+          Math.sin(this.idleT * 3.1 + bx * 4.2 + by * 2.4) * windAmt * hang
+          + Math.sin(this.walkT * 1.8 + bx * 3) * (moving ? 0.05 : 0.015) * hang)
+      }
+      cp.needsUpdate = true
+      capeGeo.computeVertexNormals()
     }
-    cp.needsUpdate = true
-    capeGeo.computeVertexNormals()
 
     if (this.mounted) {
-      this.horse.userData.legs.forEach((leg, i) => {
-        const ph = (i === 0 || i === 3) ? 0 : Math.PI
-        leg.rotation.x = this.rollT >= 0 ? 0 : (moving ? Math.sin(this.walkT + ph) * 0.6 : 0)
-      })
+      if (this.horse.userData.legs) {
+        this.horse.userData.legs.forEach((leg, i) => {
+          const ph = (i === 0 || i === 3) ? 0 : Math.PI
+          leg.rotation.x = this.rollT >= 0 ? 0 : (moving ? Math.sin(this.walkT + ph) * 0.6 : 0)
+        })
+      }
+      if (this.horseGltf) this.driveHorse(dt, moving)
       this.horse.rotation.y = 0
       this.horse.position.y = moving ? Math.abs(Math.sin(this.walkT * 0.5)) * 0.06 : 0
     }

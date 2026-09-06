@@ -758,6 +758,37 @@ function shine(g, x, y, z, r = 0.03) {
   return s
 }
 
+// --- GLTF enemy path (Phase 3): assets may provide skinned models per type ---
+// Target heights match the procedural models' bounding heights so HP bars,
+// telegraphs, knockdown poses and defeat cinematics keep working unchanged.
+const PROC_H = { rat: 1.2, fox: 1.5, boar: 1.85, wolf: 1.85, bear: 2.6, owl: 2.4, elder: 3.0, bull: 4.0 }
+const MODEL_YAW = { rat: Math.PI, fox: Math.PI, boar: Math.PI, wolf: Math.PI, bear: Math.PI, owl: Math.PI, elder: Math.PI, bull: Math.PI }
+
+function buildModelGLTF(type, A) {
+  const g = new THREE.Group()
+  const clone = A.model(type)
+  if (!clone) return buildModel(type)
+  const bb = new THREE.Box3().setFromObject(clone)
+  const h = Math.max(0.001, bb.max.y - bb.min.y)
+  clone.scale.setScalar((PROC_H[type] || 1.8) / h)
+  bb.setFromObject(clone)
+  clone.position.y -= bb.min.y
+  // SkinnedMesh bounding spheres don't follow posed bones — disable culling
+  clone.traverse((o) => { if (o.isMesh) o.frustumCulled = false })
+  const inner = new THREE.Group()
+  inner.rotation.y = MODEL_YAW[type] ?? Math.PI
+  inner.add(clone)
+  g.add(inner)
+  const clips = A.clips(type)
+  let flyClip = null
+  if (type === "owl") {
+    const anims = A.gltf(type)?.animations || []
+    flyClip = anims.find(c => /fly|flap|glide/i.test(c.name)) || null
+  }
+  g.userData.gltf = { mixer: new THREE.AnimationMixer(clone), clips, flyClip }
+  return g
+}
+
 function makeTelegraph() {
   const g = new THREE.Group()
   const lane = new THREE.Mesh(
@@ -804,9 +835,10 @@ const SITE_OFFS = [
 ]
 
 export class EnemyManager {
-  constructor(scene, fx, opts = {}) {
+  constructor(scene, fx, opts = {}, A = null) {
     this.scene = scene
     this.fx = fx
+    this.assets = A
     this.onPlayerHit = opts.onPlayerHit || null
     this.onPerfectBlock = opts.onPerfectBlock || null
     this.onKnockdown = opts.onKnockdown || null
@@ -836,7 +868,7 @@ export class EnemyManager {
   }
 
   spawn(type, x, z, battle, idx) {
-    const model = buildModel(type)
+    const model = (this.assets && this.assets.model(type)) ? buildModelGLTF(type, this.assets) : buildModel(type)
     model.rotation.y = Math.PI
     const gr = new THREE.Group()
     gr.add(model)
@@ -853,11 +885,12 @@ export class EnemyManager {
     gr.add(tg.group)
     const meshes = []
     model.traverse(o => {
-      if (o.isMesh && o.material) {
+      if (o.isMesh && o.material && o.material.emissive) {
         meshes.push(o)
-        o.userData.be = o.material.emissive ? o.material.emissive.getHex() : 0
+        o.userData.be = o.material.emissive.getHex()
       }
     })
+    const gm = model.userData.gltf || null
     const e = {
       type, battle, idx, model, group: gr,
       name: battle ? battle.title : NAMES[type],
@@ -872,6 +905,12 @@ export class EnemyManager {
       maxHp,
       bar,
       meshes,
+      mixer: gm ? gm.mixer : null,
+      clips: gm ? gm.clips : null,
+      flyClip: gm ? gm.flyClip : null,
+      actions: {},
+      curAction: null,
+      curAnim: null,
       flashT: 0,
       flinchT: -1,
       staggerT: -1,
@@ -1064,6 +1103,7 @@ export class EnemyManager {
       e.group.position.z += e.kb.z * dt
       e.kb.multiplyScalar(Math.exp(-6 * dt))
     }
+    if (e.mixer) this.updateAnim(e, dt, t)
     if (e.model.userData.tail) e.model.userData.tail.rotation.y = Math.sin(t * 3.2 + e.home.x) * 0.35
     if (e.flashT > 0) {
       e.flashT -= dt
@@ -1081,6 +1121,52 @@ export class EnemyManager {
       }
     }
     if (e.barShakeT > 0) e.barShakeT -= dt
+  }
+
+  updateAnim(e, dt, t) {
+    const c = e.clips
+    if (!c) return
+    if (e.defeatT >= 0 || e.state === "defeat") {
+      if (e.curAnim !== "defeat") { e.mixer.stopAllAction(); e.curAnim = "defeat" }
+      return
+    }
+    if (e.down) {
+      if (e.curAnim !== "down") { e.mixer.stopAllAction(); e.curAnim = "down" }
+      return
+    }
+    let key, ts = 1
+    if (e.staggerT >= 0) key = "stagger"
+    else if (e.diving) key = "run"
+    else if (e.fleeing) key = "run"
+    else if (e.chargeState === "windup") { key = "idle"; ts = 0.6 }
+    else if (e.chargeState === "charge") key = "run"
+    else if (e.walking) key = "walk"
+    else key = "idle"
+    if (key === "stagger") {
+      if (e.curAnim !== "stagger") { e.mixer.stopAllAction(); e.curAnim = "stagger" }
+      return
+    }
+    let clip
+    if (key === "run") clip = (e.type === "owl" && e.flyClip) ? e.flyClip : (c.run || c.walk)
+    else if (key === "walk") clip = c.walk || c.run || (e.type === "owl" && e.flyClip)
+    else clip = (e.type === "owl" && e.flyClip) ? e.flyClip : c.idle
+    if (!clip) return
+    let a = e.actions[key]
+    if (!a) {
+      a = e.mixer.clipAction(clip)
+      a.setLoop(THREE.LoopRepeat)
+      e.actions[key] = a
+    }
+    if (e.curAction !== a) {
+      a.reset().setEffectiveTimeScale(ts).setEffectiveWeight(1)
+      if (e.curAction) a.crossFadeFrom(e.curAction, 0.15, false)
+      a.play()
+      e.curAction = a
+    } else {
+      a.timeScale = ts
+    }
+    e.curAnim = key
+    e.mixer.update(dt)
   }
 
   updateBar(e, d) {
@@ -1348,6 +1434,7 @@ export class EnemyManager {
     e.state = "defeat"
     e.chargeState = "none"
     e.staggerT = -1
+    if (e.mixer) e.mixer.stopAllAction()
     e.bar.group.visible = false
     this.hideTelegraph(e)
     e.defeatDir = Math.random() * Math.PI * 2

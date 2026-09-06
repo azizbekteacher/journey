@@ -1,4 +1,5 @@
 import * as THREE from "three"
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js"
 
 export const SIZE = 400
 const HALF = SIZE / 2
@@ -28,6 +29,41 @@ function plantTrees(parent, spots, name, targetH, sMin = 0.9, sMax = 1.4) {
     t.rotation.y = Math.random() * Math.PI * 2
     t.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true } })
     parent.add(t)
+  }
+  return true
+}
+
+// Batch planting: ONE InstancedMesh per (species, sub-mesh) — low draw calls,
+// tiny vertex memory, same tri count as clones. Instances span the map, so the
+// mesh itself is never frustum-culled; vertex cost is trivial for these trees.
+function plantTreesMerged(parent, spots, name, targetH, sMin = 0.9, sMax = 1.4) {
+  const proto = ASSETS && ASSETS.model(name)
+  if (!proto) return false
+  const f = gltfFit(name)
+  proto.updateMatrixWorld(true)
+  const rel = proto.matrixWorld.clone().invert()
+  const parts = []
+  proto.traverse((o) => { if (o.isMesh) parts.push(o) })
+  const N = spots.length
+  const M = new THREE.Matrix4(), Q = new THREE.Quaternion(), E = new THREE.Euler(), V = new THREE.Vector3(), S = new THREE.Vector3()
+  for (const mesh of parts) {
+    const geo = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry
+    const im = new THREE.InstancedMesh(geo, mesh.material, N)
+    const local = mesh.matrixWorld.clone().premultiply(rel)
+    spots.forEach((p, i) => {
+      const s = (targetH / (f ? f.sy : targetH)) * (sMin + Math.random() * (sMax - sMin))
+      E.set(0, Math.random() * Math.PI * 2, 0)
+      Q.setFromEuler(E)
+      V.set(p.x, p.y - (f ? f.minY * s : 0), p.z)
+      S.setScalar(s)
+      M.compose(V, Q, S).multiply(local)
+      im.setMatrixAt(i, M)
+    })
+    im.instanceMatrix.needsUpdate = true
+    im.castShadow = true
+    im.receiveShadow = true
+    im.frustumCulled = false
+    parent.add(im)
   }
   return true
 }
@@ -190,9 +226,18 @@ function makeRuins(item) {
     blocks.push(m)
   }
   if (item.kind === "tree") {
-    const stump = cyl(0.4, 0.62, 0.7, "#6b4a30", {}, 7)
-    stump.position.set(0, 0.35, 0)
-    g.add(stump)
+    const stM = ASSETS && ASSETS.model("stump")
+    if (stM) {
+      const f = gltfFit("stump")
+      const s = f ? 1.3 / f.sy : 1
+      stM.scale.setScalar(s)
+      stM.position.y = f ? -f.minY * s : 0.35
+      g.add(stM)
+    } else {
+      const stump = cyl(0.4, 0.62, 0.7, "#6b4a30", {}, 7)
+      stump.position.set(0, 0.35, 0)
+      g.add(stump)
+    }
   }
   g.position.set(item.x, item.y, item.z)
   g.visible = false
@@ -320,18 +365,7 @@ function splatGroundMat() {
         splatC += texture2D(uCsnow, vWPos.xz * 0.5).rgb * vW1.x;
         splatC += texture2D(uCpath, vWPos.xz * 0.4).rgb * vW1.y;
         diffuseColor.rgb *= splatC * mix(vec3(1.0), vColor * 1.9, 0.55);`)
-      .replace("#include <normal_fragment_maps>", `
-        vec3 splatN = texture2D(uNgrass, vWPos.xz * 0.55).xyz * vW0.x;
-        splatN += texture2D(uNforest, vWPos.xz * 0.5).xyz * vW0.y;
-        splatN += texture2D(uNdry, vWPos.xz * 0.45).xyz * vW0.z;
-        splatN += texture2D(uNrock, vWPos.xz * 0.35).xyz * vW0.w;
-        splatN += texture2D(uNsnow, vWPos.xz * 0.5).xyz * vW1.x;
-        splatN += texture2D(uNpath, vWPos.xz * 0.4).xyz * vW1.y;
-        vec3 snN = splatN * 2.0 - 1.0;
-        vec3 wNn = normalize(vWN);
-        vec3 wTn = normalize(cross(vec3(0.0, 0.0, 1.0), wNn) + vec3(0.001, 0.0, 0.0));
-        vec3 wBn = cross(wNn, wTn);
-        normal = normalize(wTn * snN.x + wBn * snN.y + wNn * max(snN.z, 0.25));`)
+      .replace("#include <normal_fragment_maps>", ``)
   }
   return m
 }
@@ -981,10 +1015,10 @@ function buildVillage(parent) {
     b2.rotation.y = -Math.PI / 2
     keep.add(b2)
   }
-  const doorFrame = boxTex(6, 6.5, 1, "#efe8d6", "stone", D_stone)
+  const doorFrame = boxTex(6, 6.5, 1, "#6e685c", "stone", D_stone)
   doorFrame.position.set(0, 3.25, 6.2)
   keep.add(doorFrame)
-  const doorL = boxTex(1.9, 5.6, 0.4, "#5d4630", "timber", D_timber)
+  const doorL = boxTex(1.9, 5.6, 0.4, "#4a3626", "timber", D_timber)
   doorL.position.set(-0.95, 2.8, 6.2)
   keep.add(doorL)
   const doorR = doorL.clone()
@@ -1018,6 +1052,7 @@ function buildVillage(parent) {
   keepFlag.position.set(1, 18.4, 0)
   keepFlag.rotation.y = Math.PI / 2
   keep.add(keepFlag)
+  }
   keep.position.set(0, 0, -26)
   keep.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true } })
   v.add(keep)
@@ -1060,13 +1095,42 @@ function buildVillage(parent) {
     [9, 31, -2.4, 6, 5, 4, "#8f5c40", "The Lantern House"],
     [-30, 2, 0.9, 6.5, 5.5, 4.2, "#9a5a3c", "The Old Merchant's Home"]
   ]
+  let hi = 0
   for (const [hx, hz, hry, hw, hd, hh, hrc, label] of houseDefs) {
-    const gr = house(v, hx, hz, hry, hw, hd, hh, hrc)
+    const hname = hi % 2 ? "house_b" : "house_a"
+    const hm = ASSETS && ASSETS.model(hname)
+    let gr
+    if (hm) {
+      const f = gltfFit(hname)
+      const s = f ? Math.min((hw + 1.2) / f.sx, (hd + 1.2) / f.sz) : 1
+      hm.scale.setScalar(s)
+      hm.position.y = f ? -f.minY * s : 0
+      const hy = heightAt(hx, hz)
+      gr = new THREE.Group()
+      gr.add(hm)
+      gr.position.set(hx, hy, hz)
+      gr.rotation.y = hry
+      gr.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true } })
+      v.add(gr)
+      anims.smokeSrc = anims.smokeSrc || []
+      anims.smokeSrc.push(new THREE.Vector3(hx + hw / 3, hy + (f ? f.sy * s : hh + 3.6), hz - hd / 4))
+    } else {
+      gr = house(v, hx, hz, hry, hw, hd, hh, hrc)
+    }
     registerDestroyable(v, gr, { kind: "house", label, icon: "🏠", hp: 2, rx: hw, rz: hd })
+    hi++
   }
 
   for (let i = 0; i < 2; i++) {
     const stall = new THREE.Group()
+    const tentM = ASSETS && ASSETS.model("tent")
+    if (tentM) {
+      const f = gltfFit("tent")
+      const s = f ? Math.min(3.6 / f.sx, 3 / f.sz) : 1
+      tentM.scale.setScalar(s)
+      tentM.position.y = f ? -f.minY * s : 0
+      stall.add(tentM)
+    } else {
     const top = box(3.4, 0.2, 2, "#8a6a44")
     top.position.y = 1.5
     stall.add(top)
@@ -1080,7 +1144,18 @@ function buildVillage(parent) {
       pole.position.set(px, 1.55, -0.6)
       stall.add(pole)
     }
+    const crateM = ASSETS && ASSETS.model("crate")
     for (const px of [-0.9, 0, 0.9]) {
+      if (crateM) {
+        const cf = gltfFit("crate")
+        const cs = cf ? 0.7 / cf.sy : 1
+        const cr = crateM.clone()
+        cr.scale.setScalar(cs)
+        cr.position.set(px, cf ? -cf.minY * cs : 0, 0)
+        cr.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true } })
+        stall.add(cr)
+        continue
+      }
       const crate = box(0.7, 0.6, 0.7, i ? "#c98a3f" : "#b8483e")
       crate.position.set(px, 1.95, 0)
       stall.add(crate)
@@ -1097,8 +1172,10 @@ function buildVillage(parent) {
       good.castShadow = true
       stall.add(good)
     }
+    }
     stall.position.set(i ? 8 : -8, 0, 20)
     stall.rotation.y = i ? -0.5 : 0.5
+    stall.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true } })
     v.add(stall)
     registerDestroyable(v, stall, { kind: "stall", label: i ? "The Crimson Stall" : "The Green Stall", icon: "⛺", hp: 1, rx: 2.4, rz: 1.8 })
   }
@@ -1126,6 +1203,14 @@ function buildVillage(parent) {
   v.add(board)
 
   const stable = new THREE.Group()
+  const stableM = ASSETS && ASSETS.model("stable")
+  if (stableM) {
+    const f = gltfFit("stable")
+    const s = f ? Math.min(8 / f.sx, 6.5 / f.sz) : 1
+    stableM.scale.setScalar(s)
+    stableM.position.y = f ? -f.minY * s : 0
+    stable.add(stableM)
+  } else {
   const sBase = boxTex(7.5, 0.5, 6, "#8d8a80", "stone", D_stone)
   sBase.position.y = 0.25
   stable.add(sBase)
@@ -1163,6 +1248,7 @@ function buildVillage(parent) {
   }
   rack.position.set(4.3, 0, 0)
   stable.add(rack)
+  }
   stable.position.set(24, 0, 24)
   stable.rotation.y = -0.8
   v.add(stable)
@@ -1235,8 +1321,150 @@ function scatter(count, zone, minDist = 45, maxDist = 195, near = null, spread =
 }
 
 const TREE_NAMES = ["Oak", "Ironwood", "Fallow Elm", "The Old Willow", "Guild Pine", "Sentinel Oak", "The Whispering Birch"]
+
+// ---- grass system: crossed-blade tufts, ~80k instances in ~12 culled chunks ----
+const grassPts = []
+const grassChunks = []
+let grassPathGrid = null
+function grassPathBlocked(x, z) {
+  if (!grassPathGrid) {
+    grassPathGrid = new Uint8Array(40 * 40)
+    const cell = SIZE / 40
+    for (let gy = 0; gy < 40; gy++) {
+      for (let gx = 0; gx < 40; gx++) {
+        const cx = -HALF + (gx + 0.5) * cell, cz = -HALF + (gy + 0.5) * cell
+        let best = 1e9
+        for (const p of pathPts) { const d2 = (cx - p.x) ** 2 + (cz - p.z) ** 2; if (d2 < best) best = d2 }
+        if (best < 64) grassPathGrid[gy * 40 + gx] = 1
+      }
+    }
+  }
+  const gx = Math.floor((x + HALF) / (SIZE / 40)), gy = Math.floor((z + HALF) / (SIZE / 40))
+  if (gx < 0 || gy < 0 || gx > 39 || gy > 39) return true
+  return grassPathGrid[gy * 40 + gx] === 1
+}
+function collectGrass(count, zone) {
+  let n = 0, guard = 0
+  while (n < count && guard++ < count * 4) {
+    const x = (Math.random() - 0.5) * 380
+    const z = (Math.random() - 0.5) * 380
+    if (zoneAt(x, z) !== zone) continue
+    if (grassPathBlocked(x, z)) continue
+    let wet = false
+    for (const wf of [FLATS[10], FLATS[11]]) { if (Math.hypot(x - wf.x, z - wf.z) < wf.r + 2) { wet = true; break } }
+    if (wet) continue
+    const h = heightAt(x, z)
+    if (h > 9.2) continue
+    grassPts.push({ x, y: h, z })
+    n++
+  }
+}
+function grassTexture() {
+  const c = document.createElement("canvas")
+  c.width = c.height = 128
+  const x = c.getContext("2d")
+  const n = 5 + Math.floor(Math.random() * 3)
+  for (let i = 0; i < n; i++) {
+    const bx = 14 + (i / (n - 1)) * 100 + (Math.random() - 0.5) * 12
+    const bend = (Math.random() - 0.5) * 44
+    const w = 4.5 + Math.random() * 3.5
+    const grad = x.createLinearGradient(0, 128, 0, 8)
+    grad.addColorStop(0, "#2e5a24")
+    grad.addColorStop(0.55, "#4e8a34")
+    grad.addColorStop(1, "#a8c86a")
+    x.fillStyle = grad
+    x.beginPath()
+    x.moveTo(bx - w, 128)
+    x.quadraticCurveTo(bx - w * 0.4 + bend * 0.4, 64, bx + bend, 6 + Math.random() * 14)
+    x.quadraticCurveTo(bx + w * 0.4 + bend * 0.4, 64, bx + w, 128)
+    x.closePath()
+    x.fill()
+  }
+  const t = new THREE.CanvasTexture(c)
+  t.colorSpace = THREE.SRGBColorSpace
+  return t
+}
+function crossedTuftGeo() {
+  const geos = []
+  for (const ry of [0, Math.PI / 3, (2 * Math.PI) / 3]) {
+    const p = new THREE.PlaneGeometry(0.5, 0.6, 1, 2)
+    p.translate(0, 0.3, 0)
+    p.rotateY(ry)
+    geos.push(p)
+  }
+  let vCount = 0, iCount = 0
+  for (const g of geos) { vCount += g.attributes.position.count; iCount += g.index.count }
+  const posA = new Float32Array(vCount * 3), norA = new Float32Array(vCount * 3), uvA = new Float32Array(vCount * 2)
+  const idxA = new Uint16Array(iCount)
+  let vo = 0, io = 0
+  for (const g of geos) {
+    posA.set(g.attributes.position.array, vo * 3)
+    norA.set(g.attributes.normal.array, vo * 3)
+    uvA.set(g.attributes.uv.array, vo * 2)
+    const gi = g.index.array
+    for (let i = 0; i < gi.length; i++) idxA[io + i] = gi[i] + vo
+    vo += g.attributes.position.count
+    io += gi.length
+  }
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute("position", new THREE.BufferAttribute(posA, 3))
+  geo.setAttribute("normal", new THREE.BufferAttribute(norA, 3))
+  geo.setAttribute("uv", new THREE.BufferAttribute(uvA, 2))
+  geo.setIndex(new THREE.BufferAttribute(idxA, 1))
+  return geo
+}
+function finishGrass(parent) {
+  if (!grassPts.length) return
+  const geo = crossedTuftGeo()
+  const mtl = new THREE.MeshStandardMaterial({ map: grassTexture(), alphaTest: 0.45, side: THREE.DoubleSide, roughness: 0.9, metalness: 0 })
+  windify(mtl, 0.8)
+  const COLS = 4, ROWS = 3
+  const cellX = SIZE / COLS, cellZ = SIZE / ROWS
+  const buckets = []
+  for (let i = 0; i < COLS * ROWS; i++) buckets.push([])
+  for (const p of grassPts) {
+    const gx = Math.min(COLS - 1, Math.max(0, Math.floor((p.x + HALF) / cellX)))
+    const gz = Math.min(ROWS - 1, Math.max(0, Math.floor((p.z + HALF) / cellZ)))
+    buckets[gz * COLS + gx].push(p)
+  }
+  const mtx = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler()
+  const pv = new THREE.Vector3(), sv = new THREE.Vector3(), tint = new THREE.Color()
+  for (let b = 0; b < buckets.length; b++) {
+    const arr = buckets[b]
+    if (!arr.length) continue
+    const im = new THREE.InstancedMesh(geo, mtl, arr.length)
+    for (let i = 0; i < arr.length; i++) {
+      const p = arr[i]
+      e.set((Math.random() - 0.5) * 0.25, Math.random() * Math.PI * 2, (Math.random() - 0.5) * 0.25)
+      q.setFromEuler(e)
+      const s = 0.7 + Math.random() * 0.9
+      pv.set(p.x, p.y - 0.03, p.z)
+      sv.set(s, s * (0.85 + Math.random() * 0.5), s)
+      mtx.compose(pv, q, sv)
+      im.setMatrixAt(i, mtx)
+      tint.setHSL(0.25 + (Math.random() - 0.5) * 0.05, 0.25, 0.55 + (Math.random() - 0.5) * 0.18)
+      im.setColorAt(i, tint)
+    }
+    if (im.instanceColor) im.instanceColor.needsUpdate = true
+    im.castShadow = false
+    im.receiveShadow = true
+    const cx = -HALF + ((b % COLS) + 0.5) * cellX
+    const cz = -HALF + (Math.floor(b / COLS) + 0.5) * cellZ
+    grassChunks.push({ im, cx, cz })
+    parent.add(im)
+  }
+}
+
 function heroTree(parent, x, z, name) {
   const g = new THREE.Group()
+  const hm = ASSETS && ASSETS.model("oak")
+  if (hm) {
+    const f = gltfFit("oak")
+    const s = (f ? 10 / f.sy : 6) * 1.7 * (0.92 + Math.random() * 0.16)
+    hm.scale.setScalar(s)
+    hm.position.y = f ? -f.minY * s : 0
+    g.add(hm)
+  } else {
   const s = 1 + Math.random() * 0.35
   const trunk = cyl(0.34, 0.54, 2.7, "#5f4128", {}, 9)
   trunk.position.y = 1.35
@@ -1257,6 +1485,7 @@ function heroTree(parent, x, z, name) {
   f4.position.set(0, 10.1, 0)
   g.add(f4)
   g.scale.setScalar(s)
+  }
   g.position.set(x, heightAt(x, z), z)
   g.traverse((o) => { if (o.isMesh) { o.castShadow = true } })
   parent.add(g)
@@ -1265,7 +1494,9 @@ function heroTree(parent, x, z, name) {
 }
 
 function buildWoods(parent) {
-  const trunks = scatter(120, "woods").map(p => ({ ...p, y: p.y, s: 0.9 + Math.random() * 0.5 }))
+  const oakSpots = scatter(120, "woods")
+  if (!plantTreesMerged(parent, oakSpots, "oak", 10)) {
+  const trunks = oakSpots.map(p => ({ ...p, y: p.y, s: 0.9 + Math.random() * 0.5 }))
   instanced(parent, new THREE.CylinderGeometry(0.34, 0.54, 2.7, 9).translate(0, 1.35, 0), mat("#5f4128"), trunks)
   instanced(parent, new THREE.CylinderGeometry(0.22, 0.34, 2.2, 8).translate(0, 3.6, 0), mat("#6b4a30"), trunks)
   const flareGeo = new THREE.ConeGeometry(0.3, 1.3, 7).translate(0, 0.65, 0).rotateZ(0.55)
@@ -1295,8 +1526,11 @@ function buildWoods(parent) {
   instanced(parent, new THREE.SphereGeometry(1.1, 9, 7).translate(0, 10.1, 0),
     (() => { const m = mat("#558a4e"); windify(m, 0.9); return m })(),
     trunks.map(t => ({ x: t.x + (Math.random() - 0.5) * 0.8, y: t.y, z: t.z + (Math.random() - 0.5) * 0.8, s: t.s * (0.45 + Math.random() * 0.2) })), { shadow: false })
+  }
 
-  const bl = scatter(75, "woods").map(p => ({ ...p, s: 0.9 + Math.random() * 0.6 }))
+  const blSpots = scatter(75, "woods")
+  if (!plantTreesMerged(parent, blSpots, "blossom", 9, 0.9, 1.5)) {
+  const bl = blSpots.map(p => ({ ...p, s: 0.9 + Math.random() * 0.6 }))
   instanced(parent, new THREE.CylinderGeometry(0.22, 0.42, 3.9, 8).translate(0, 1.95, 0), mat("#5f4530"), bl)
   instanced(parent, new THREE.SphereGeometry(2.4, 10, 8).scale(1, 0.9, 1).translate(0, 4.9, 0),
     (() => { const m = mat("#e79ab5"); windify(m, 0.75); return m })(),
@@ -1319,15 +1553,31 @@ function buildWoods(parent) {
   }
   instanced(parent, new THREE.SphereGeometry(0.16, 6, 5).translate(0, 0.16, 0),
     (() => { const m = mat("#f7cadd"); windify(m, 0.9); return m })(), bpetals, { shadow: false })
+  }
 
   const heroSpots = scatter(14, "woods", 55, 185)
   heroSpots.forEach((p, i) => {
     heroTree(parent, p.x, p.z, TREE_NAMES[i % TREE_NAMES.length])
   })
+  collectGrass(22000, "woods")
 
-  const shrooms = scatter(60, "woods", 45, 190)
-  instanced(parent, new THREE.CylinderGeometry(0.18, 0.25, 0.55, 6).translate(0, 0.27, 0), mat("#f0e6d2"), shrooms.map(s => ({ ...s, s: 0.8 + Math.random() })))
-  instanced(parent, new THREE.SphereGeometry(0.5, 8, 6, 0, Math.PI * 2, 0, Math.PI / 2).translate(0, 0.55, 0), mat("#c94f43"), shrooms.map(s => ({ ...s, s: 0.8 + Math.random() })))
+  const shroomSpots = scatter(60, "woods", 45, 190)
+  const shroomM = ASSETS && ASSETS.model("mushroom")
+  if (shroomM) {
+    const mf = gltfFit("mushroom")
+    for (const p of shroomSpots) {
+      const m = shroomM.clone()
+      const s = (0.8 + Math.random()) * (mf ? 0.7 / mf.sy : 1)
+      m.scale.setScalar(s)
+      m.position.set(p.x, p.y - (mf ? mf.minY * s : 0), p.z)
+      m.rotation.y = Math.random() * Math.PI * 2
+      m.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true } })
+      parent.add(m)
+    }
+  } else {
+    instanced(parent, new THREE.CylinderGeometry(0.18, 0.25, 0.55, 6).translate(0, 0.27, 0), mat("#f0e6d2"), shroomSpots.map(s => ({ ...s, s: 0.8 + Math.random() })))
+    instanced(parent, new THREE.SphereGeometry(0.5, 8, 6, 0, Math.PI * 2, 0, Math.PI / 2).translate(0, 0.55, 0), mat("#c94f43"), shroomSpots.map(s => ({ ...s, s: 0.8 + Math.random() })))
+  }
 
   const pond = SPECIALS.pond
   const pw = new THREE.Mesh(new THREE.CircleGeometry(10.5, 40).rotateX(-Math.PI / 2), waterMat("#4f8fae"))
@@ -1381,7 +1631,21 @@ function buildPlains(parent) {
 
   const poppies = scatter(240, "plains", 47, 180)
   instanced(parent, new THREE.SphereGeometry(0.16, 6, 5).translate(0, 0.55, 0), mat("#c2432f"), poppies.map(p => ({ ...p, s: 0.9 + Math.random() * 0.5 })), { shadow: false })
+  collectGrass(26000, "plains")
 
+  const fenceM = ASSETS && ASSETS.model("fence")
+  if (fenceM) {
+    const ff = gltfFit("fence")
+    for (let i = 0; i < 5; i++) {
+      const fx = 75 + i * 2.5 + 1.25, fz = -11
+      const seg = fenceM.clone()
+      const s = ff ? 2.5 / ff.sx : 1
+      seg.scale.setScalar(s)
+      seg.position.set(fx, heightAt(fx, fz) - (ff ? ff.minY * s : 0), fz)
+      seg.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true } })
+      parent.add(seg)
+    }
+  } else {
   const fenceMat = mat("#b8a27a")
   for (let i = 0; i < 5; i++) {
     const fx = 75 + i * 2.5, fz = -11
@@ -1393,6 +1657,7 @@ function buildPlains(parent) {
       rail.position.set(fx + 2, heightAt(fx, fz) + 1, fz)
       parent.add(rail)
     }
+  }
   }
 
   const wm = SPECIALS.windmill
@@ -1465,7 +1730,9 @@ function buildHighlands(parent) {
     (() => { const m = mat("#8fb374", { side: THREE.DoubleSide }); windify(m, 0.75); return m })(),
     willowT.map(t => ({ x: t.x + (Math.random() - 0.5) * 0.4, y: t.y, z: t.z + (Math.random() - 0.5) * 0.4, ry: t.x * 0.14 + t.z * 0.31, s: t.s * (0.8 + Math.random() * 0.3), sy: t.s * (0.85 + Math.random() * 0.3) })), { shadow: false })
 
-  const pines = scatter(90, "highlands", 63, 190).map(p => ({ ...p, s: 1 + Math.random() * 0.7 }))
+  const pineSpots = scatter(90, "highlands", 63, 190)
+  if (!plantTreesMerged(parent, pineSpots, "pine", 11.5, 1, 1.7)) {
+  const pines = pineSpots.map(p => ({ ...p, s: 1 + Math.random() * 0.7 }))
   instanced(parent, new THREE.CylinderGeometry(0.22, 0.38, 3.4, 8).translate(0, 1.7, 0), mat("#4d3a2a"), pines)
   const pflares = []
   for (const t of pines) {
@@ -1493,6 +1760,7 @@ function buildHighlands(parent) {
   instanced(parent, new THREE.ConeGeometry(0.6, 1.6, 8).translate(0, 10.9, 0),
     (() => { const m = mat("#eef2ec"); windify(m, 0.5); return m })(),
     pines.map(t => ({ ...t, ry: t.z * 0.07 + t.x * 0.11 + 9.4 })), { shadow: false })
+  }
 
   const stm = SPECIALS.stream
   const stream = new THREE.Mesh(new THREE.PlaneGeometry(150, 7, 20, 2).rotateX(-Math.PI / 2), waterMat("#6aa5c4"))
@@ -1632,14 +1900,42 @@ function buildProps(parent) {
   instanced(parent, new THREE.SphereGeometry(0.1, 5, 4).translate(0, 0.46, 0), mat("#8fa8e0"),
     bells.map(p => ({ ...p, s: 0.8 + Math.random() * 0.6 })), { shadow: false })
 
-  const bushes = scatter(70, "plains", 47, 185)
-  instanced(parent, new THREE.SphereGeometry(0.75, 7, 5).translate(0, 0.38, 0).scale(1.3, 0.8, 1.3),
-    (() => { const m = mat("#7d9a4e"); windify(m, 0.6); return m })(),
-    bushes.map(p => ({ ...p, s: 0.7 + Math.random() * 0.9 })))
+  const bushSpots = scatter(70, "plains", 47, 185)
+  const bushM = ASSETS && ASSETS.model("bush")
+  if (bushM) {
+    const bf = gltfFit("bush")
+    for (const p of bushSpots) {
+      const m = bushM.clone()
+      const s = (0.7 + Math.random() * 0.9) * (bf ? 1.5 / bf.sy : 1)
+      m.scale.setScalar(s)
+      m.position.set(p.x, p.y - (bf ? bf.minY * s : 0), p.z)
+      m.rotation.y = Math.random() * Math.PI * 2
+      m.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true } })
+      parent.add(m)
+    }
+  } else {
+    instanced(parent, new THREE.SphereGeometry(0.75, 7, 5).translate(0, 0.38, 0).scale(1.3, 0.8, 1.3),
+      (() => { const m = mat("#7d9a4e"); windify(m, 0.6); return m })(),
+      bushSpots.map(p => ({ ...p, s: 0.7 + Math.random() * 0.9 })))
+  }
 
-  const daisies = scatter(160, "plains", 47, 185)
-  instanced(parent, new THREE.SphereGeometry(0.09, 5, 4).translate(0, 0.4, 0), mat("#f5f2e6"),
-    daisies.map(p => ({ ...p, s: 0.8 + Math.random() * 0.7 })), { shadow: false })
+  const daisySpots = scatter(120, "plains", 47, 185)
+  const flowerM = ASSETS && ASSETS.model("flower")
+  if (flowerM) {
+    const df = gltfFit("flower")
+    for (const p of daisySpots) {
+      const m = flowerM.clone()
+      const s = (0.8 + Math.random() * 0.7) * (df ? 0.5 / df.sy : 1)
+      m.scale.setScalar(s)
+      m.position.set(p.x, p.y - (df ? df.minY * s : 0), p.z)
+      m.rotation.y = Math.random() * Math.PI * 2
+      m.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true } })
+      parent.add(m)
+    }
+  } else {
+    instanced(parent, new THREE.SphereGeometry(0.09, 5, 4).translate(0, 0.4, 0), mat("#f5f2e6"),
+      daisySpots.map(p => ({ ...p, s: 0.8 + Math.random() * 0.7 })), { shadow: false })
+  }
 
   const brocks = scatter(40, "highlands", 56, 190)
   instanced(parent, new THREE.DodecahedronGeometry(1.25, 0).translate(0, 0.6, 0), mat("#9b9484"),
@@ -1651,6 +1947,14 @@ function buildProps(parent) {
     snow.map(p => ({ ...p, s: 0.6 + Math.random() * 1.2 })), { shadow: false })
 
   const well = new THREE.Group()
+  const wellM = ASSETS && ASSETS.model("well")
+  if (wellM) {
+    const f = gltfFit("well")
+    const s = f ? Math.min(3.6 / f.sx, 3.6 / f.sy) : 1
+    wellM.scale.setScalar(s)
+    wellM.position.y = f ? -f.minY * s : 0
+    well.add(wellM)
+  } else {
   const wbase = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.7, 1.1, 12), mat("#a89e8c", { map: tex("stone", D_stone, 4) }))
   wbase.position.y = 0.55
   wbase.castShadow = true; wbase.receiveShadow = true
@@ -1696,16 +2000,26 @@ function buildProps(parent) {
   const bucket = cyl(0.28, 0.22, 0.32, "#8a6a44", {}, 8)
   bucket.position.set(0, 1.42, 0)
   well.add(bucket)
+  }
   well.position.set(-6, heightAt(-6, 14), 14)
   well.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true } })
   parent.add(well)
 
   const bandMat = mat("#4a3826")
+  const barrelM = ASSETS && ASSETS.model("barrel")
   const propSpots = [[-13, 1], [19.5, 3], [7, 27.5], [-9.5, 24]]
   for (const [bx, bz] of propSpots) {
     const n = 1 + Math.floor(Math.random() * 2)
     for (let k = 0; k < n; k++) {
       const brl = new THREE.Group()
+      if (barrelM) {
+        const f = gltfFit("barrel")
+        const s = f ? 1.15 / f.sy : 1
+        const b = barrelM.clone()
+        b.scale.setScalar(s)
+        b.position.y = f ? -f.minY * s : 0
+        brl.add(b)
+      } else {
       const body = cyl(0.5, 0.55, 1.1, "#8a6a44", {}, 10)
       body.position.y = 0.55
       brl.add(body)
@@ -1721,6 +2035,7 @@ function buildProps(parent) {
         stave.position.set(Math.cos(sa) * 0.53, 0.55, Math.sin(sa) * 0.53)
         stave.rotation.y = Math.PI / 2 - sa
         brl.add(stave)
+      }
       }
       brl.position.set(bx + (Math.random() - 0.5) * 1.6, heightAt(bx, bz), bz + (Math.random() - 0.5) * 1.6)
       brl.rotation.y = Math.random() * Math.PI * 2
@@ -1753,8 +2068,11 @@ function buildProps(parent) {
 function buildSiteMarkers(parent) {
   BATTLE_SPOTS.forEach((s, i) => {
     const gr = new THREE.Group()
-    const ring = new THREE.Mesh(new THREE.RingGeometry(4.4, 5.1, 26).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: "#d9b45b", transparent: true, opacity: 0.55 }))
+    const ringMat = new THREE.MeshStandardMaterial({ color: "#d9b45b", emissive: "#c9a24a", emissiveIntensity: 0.3, transparent: true, opacity: 0.55 })
+    const ring = new THREE.Mesh(new THREE.RingGeometry(4.4, 5.1, 26).rotateX(-Math.PI / 2), ringMat)
     ring.position.y = 0.12
+    anims.siteRings = anims.siteRings || []
+    anims.siteRings.push(ringMat)
     gr.add(ring)
     for (let j = 0; j < 4; j++) {
       const a = (j / 4) * Math.PI * 2 + 0.5
@@ -1782,7 +2100,8 @@ function buildCoins(parent) {
   coinsGroup = new THREE.Group()
   const geo = new THREE.CylinderGeometry(0.42, 0.42, 0.09, 14)
   geo.rotateX(Math.PI / 2)
-  const cmat = new THREE.MeshLambertMaterial({ color: "#f0c34e", emissive: "#a97b1e", emissiveIntensity: 0.55 })
+  const cmat = new THREE.MeshStandardMaterial({ color: "#f0c34e", metalness: 1.0, roughness: 0.18, envMapIntensity: 1.6, emissive: "#a97b1e", emissiveIntensity: 0.55 })
+  anims.coinMat = cmat
   let ci = 0
   for (const zn of ["woods", "plains", "highlands"]) {
     const zi = ["woods", "plains", "highlands"].indexOf(zn)
@@ -1824,8 +2143,24 @@ function buildAmbient(parent) {
   }
 }
 
-export function updateWorld(t, dt, fx) {
+export function updateWorld(t, dt, fx, playerPos) {
   for (const u of windMats) u.value = t
+  for (let i = 0; i < grassChunks.length; i++) {
+    const ch = grassChunks[i]
+    if (playerPos && Number.isFinite(playerPos.x)) {
+      const dx = ch.cx - playerPos.x
+      const dz = ch.cz - playerPos.z
+      ch.im.visible = dx * dx + dz * dz < 8100
+    } else {
+      ch.im.visible = true
+    }
+  }
+  if (anims.coinMat) anims.coinMat.emissiveIntensity = 0.45 + Math.sin(t * 3.1) * 0.22
+  if (anims.siteRings) {
+    for (let i = 0; i < anims.siteRings.length; i++) {
+      anims.siteRings[i].emissiveIntensity = 0.22 + Math.sin(t * 2.2 + i * 0.8) * 0.16
+    }
+  }
   if (anims.lanterns) {
     for (const L of anims.lanterns) {
       const fl = 0.42 + Math.sin(t * 7.3 + L.ph) * 0.06 + Math.sin(t * 13.7 + L.ph * 2.1) * 0.04
@@ -1851,7 +2186,7 @@ export function updateWorld(t, dt, fx) {
   if (anims.lilies) anims.lilies.forEach((l, i) => { l.position.y = l.userData.baseY + Math.sin(t * 1.6 + l.userData.ph) * 0.05 })
   anims.clouds.forEach(c => {
     c.position.x += c.userData.spd * dt
-    if (c.position.x > 310) c.position.x = -310
+    if (c.position.x > 340) c.position.x = -340
   })
   if (anims.fireflies) {
     anims.fireflies.material.opacity = 0.55 + Math.sin(t * 2.3) * 0.35

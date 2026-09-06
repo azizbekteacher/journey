@@ -16,6 +16,8 @@ import { VAULT_BASE } from "./net.js"
 
 const $ = (id) => document.getElementById(id)
 const CHAT_KEY = "journey_ai_chat_v1"
+const CHATS_KEY = "journey_ai_chats_v1"
+const MAX_CONVOS = 50
 const CONTEXT_FILES = ["About me.md", "Extra details.md", "Journey questions.md", "Tips.md"]
 const MAX_HISTORY = 30
 const CONTEXT_BUDGET = 16000
@@ -193,6 +195,7 @@ function fmtMarkdown(text) {
 // ---------------------------------------------------------------- state -----
 
 function loadChat() {
+  // Legacy single-thread shape — kept as a migration source only.
   try {
     const raw = localStorage.getItem(CHAT_KEY)
     const a = raw ? JSON.parse(raw) : []
@@ -200,6 +203,60 @@ function loadChat() {
   } catch (e) {
     return []
   }
+}
+
+function uidChat() {
+  return "c" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7)
+}
+function titleFor(text) {
+  const t = String(text || "").replace(/\s+/g, " ").trim()
+  return t ? (t.length > 34 ? t.slice(0, 34) + "…" : t) : "New chat"
+}
+function newConvo(title = "New chat") {
+  const now = Date.now()
+  return { id: uidChat(), title, msgs: [], createdAt: now, updatedAt: now }
+}
+/** Multi-conversation store (local only — never mirrored to the vault). */
+function loadChats() {
+  try {
+    const raw = localStorage.getItem(CHATS_KEY)
+    if (raw) {
+      const o = JSON.parse(raw)
+      if (o && Array.isArray(o.convos) && o.convos.length) {
+        const convos = o.convos
+          .filter((c) => c && c.id && Array.isArray(c.msgs))
+          .map((c) => ({
+            id: String(c.id), title: String(c.title || "Chat").slice(0, 80),
+            msgs: c.msgs.filter((m) => m && m.role && typeof m.content === "string").slice(-MAX_HISTORY),
+            createdAt: +c.createdAt || Date.now(), updatedAt: +c.updatedAt || Date.now(),
+          }))
+        if (convos.length) {
+          const active = convos.some((c) => c.id === o.activeId) ? o.activeId : convos[0].id
+          return { activeId: active, convos }
+        }
+      }
+    }
+  } catch (e) {}
+  // Migrate the legacy single thread into a "General" conversation.
+  const legacy = loadChat()
+  const c = newConvo(legacy.length ? "General" : "New chat")
+  c.msgs = legacy.slice(-MAX_HISTORY)
+  const state = { activeId: c.id, convos: [c] }
+  try { localStorage.setItem(CHATS_KEY, JSON.stringify(state)) } catch (e) {}
+  return state
+}
+function saveChats(state) {
+  try {
+    const slim = {
+      activeId: state.activeId,
+      convos: state.convos.slice(-MAX_CONVOS).map((c) => ({
+        id: c.id, title: c.title,
+        msgs: Array.isArray(c.msgs) ? c.msgs.slice(-MAX_HISTORY) : [],
+        createdAt: c.createdAt, updatedAt: c.updatedAt,
+      })),
+    }
+    localStorage.setItem(CHATS_KEY, JSON.stringify(slim))
+  } catch (e) {}
 }
 
 function saveChat(msgs) {
@@ -374,12 +431,142 @@ function init() {
     if (e.key === "Escape" && instrPanel && !instrPanel.classList.contains("hidden")) closeInstr()
   })
 
+  const chats = loadChats()
+  const activeConvo = () => chats.convos.find((c) => c.id === chats.activeId) || chats.convos[0]
+
   const coach = {
-    msgs: loadChat(),
+    msgs: activeConvo().msgs,
     streaming: false,
     configured: null,
     get isOpen() { return !panel.classList.contains("hidden") }
   }
+
+  // Conversations persist locally only (never mirrored to the vault).
+  const persist = () => {
+    const c = activeConvo()
+    if (c) {
+      c.updatedAt = Date.now()
+      const firstUser = c.msgs.find((m) => m.role === "user")
+      if (firstUser && (c.title === "New chat" || !c.title)) c.title = titleFor(firstUser.content)
+    }
+    saveChats(chats)
+    try { localStorage.setItem(CHAT_KEY, JSON.stringify(coach.msgs.slice(-MAX_HISTORY))) } catch (e) {}
+    renderConvos()
+  }
+
+  const fmtConvoDate = (ts) => {
+    try {
+      const d = new Date(ts)
+      const now = new Date()
+      const sameDay = d.toDateString() === now.toDateString()
+      if (sameDay) return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+      return d.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+    } catch (e) { return "" }
+  }
+
+  const renderConvos = () => {
+    const list = $("ai-convos")
+    if (!list) return
+    const sorted = [...chats.convos].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+    list.innerHTML = ""
+    for (const c of sorted) {
+      const item = document.createElement("div")
+      item.className = "ai-convo" + (c.id === chats.activeId ? " active" : "")
+      item.dataset.id = c.id
+      item.title = `${c.title}\n${c.msgs.length} messages`
+      const label = document.createElement("button")
+      label.type = "button"
+      label.className = "ai-convo-label"
+      label.innerHTML = `<span class="ai-convo-title">${escapeHtml(c.title || "Chat")}</span><span class="ai-convo-meta">${c.msgs.length} · ${escapeHtml(fmtConvoDate(c.updatedAt))}</span>`
+      label.addEventListener("click", () => switchConvo(c.id))
+      label.addEventListener("dblclick", () => renameConvo(c.id))
+      const del = document.createElement("button")
+      del.type = "button"
+      del.className = "ai-convo-del"
+      del.title = "Delete conversation"
+      del.textContent = "✕"
+      del.addEventListener("click", (e) => { e.stopPropagation(); deleteConvo(c.id) })
+      item.appendChild(label)
+      item.appendChild(del)
+      list.appendChild(item)
+    }
+  }
+
+  const switchConvo = (id) => {
+    if (coach.streaming || chats.activeId === id) return
+    if (!chats.convos.some((c) => c.id === id)) return
+    chats.activeId = id
+    coach.msgs = activeConvo().msgs
+    saveChats(chats)
+    renderHistory()
+    renderConvos()
+  }
+  const newChat = () => {
+    if (coach.streaming) return
+    const c = newConvo()
+    chats.convos.push(c)
+    while (chats.convos.length > MAX_CONVOS) {
+      const sorted = [...chats.convos].sort((a, b) => (a.updatedAt || 0) - (b.updatedAt || 0))
+      const victim = sorted.find((x) => x.id !== c.id && x.id !== chats.activeId)
+      if (!victim) break
+      chats.convos = chats.convos.filter((x) => x.id !== victim.id)
+    }
+    chats.activeId = c.id
+    coach.msgs = c.msgs
+    saveChats(chats)
+    renderHistory()
+    renderConvos()
+    setTimeout(() => input.focus(), 60)
+  }
+  const deleteConvo = (id) => {
+    if (coach.streaming) return
+    chats.convos = chats.convos.filter((c) => c.id !== id)
+    if (!chats.convos.length) chats.convos.push(newConvo())
+    if (chats.activeId === id) {
+      const sorted = [...chats.convos].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+      chats.activeId = sorted[0].id
+      coach.msgs = sorted[0].msgs
+    }
+    saveChats(chats)
+    try { localStorage.setItem(CHAT_KEY, JSON.stringify(coach.msgs.slice(-MAX_HISTORY))) } catch (e) {}
+    renderHistory()
+    renderConvos()
+    toast("🗑 Conversation deleted (local only)")
+  }
+  const renameConvo = (id) => {
+    const c = chats.convos.find((x) => x.id === id)
+    if (!c) return
+    const next = window.prompt("Rename conversation:", c.title || "")
+    if (next === null) return
+    const t = String(next).trim().slice(0, 60)
+    if (!t) return
+    c.title = t
+    c.updatedAt = Date.now()
+    saveChats(chats)
+    renderConvos()
+  }
+
+  // Sidebar layout: head stays full-width; side + main split below it.
+  const buildConvoSidebar = () => {
+    if ($("ai-convos") || !msgsEl) return
+    const composer = panel.querySelector(".ai-composer")
+    const foot = panel.querySelector(".ai-foot")
+    const layout = document.createElement("div")
+    layout.className = "ai-layout"
+    const side = document.createElement("aside")
+    side.className = "ai-side"
+    side.innerHTML = `<button type="button" id="ai-new" class="ai-new">＋ New chat</button><div id="ai-convos" class="ai-convos"></div><div class="ai-side-foot">local only · dbl-click to rename</div>`
+    const main = document.createElement("div")
+    main.className = "ai-main"
+    panel.insertBefore(layout, msgsEl)
+    layout.appendChild(side)
+    layout.appendChild(main)
+    main.appendChild(msgsEl)
+    if (composer) main.appendChild(composer)
+    if (foot) main.appendChild(foot)
+    side.querySelector("#ai-new")?.addEventListener("click", newChat)
+  }
+  buildConvoSidebar()
 
   const setStatus = (state, txt) => {
     if (!status) return
@@ -408,6 +595,7 @@ function init() {
       addBubble(m.role, fmtMarkdown(m.content))
     }
     if (!coach.msgs.length) renderWelcome()
+    renderConvos()
   }
 
   const renderWelcome = () => {
@@ -480,7 +668,7 @@ function init() {
     }
     coach.msgs.push({ role: "user", content: String(text).trim() })
     addBubble("user", fmtMarkdown(String(text).trim()))
-    saveChat(coach.msgs)
+    persist()
 
     coach.streaming = true
     sendBtn.disabled = true
@@ -505,7 +693,7 @@ function init() {
       bubbleEl.innerHTML = fmtMarkdown(acc + (acc ? "\n\n" : "") + "_⚠ " + escapeHtml(String(e.message || e)) + "_")
       coach.msgs.push({ role: "assistant", content: acc || "(error)" })
       setStatus("error", "⚠ error")
-      saveChat(coach.msgs)
+      persist()
       coach.streaming = false
       sendBtn.disabled = false
       return
@@ -514,7 +702,7 @@ function init() {
     const { visible, facts } = stripFactBlock(acc)
     bubbleEl.innerHTML = fmtMarkdown(visible || "_(no reply)_")
     coach.msgs.push({ role: "assistant", content: visible || "" })
-    saveChat(coach.msgs)
+    persist()
 
     let factN = 0
     if (facts.length) {
