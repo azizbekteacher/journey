@@ -6,7 +6,7 @@ import { mkdir, readFile, writeFile, stat } from 'node:fs/promises'
 const here = path.dirname(fileURLToPath(import.meta.url))
 // Obsidian vault (sibling folder). Override with OBSIDIAN_VAULT env var (used by tests).
 const VAULT_DIR = process.env.OBSIDIAN_VAULT || path.resolve(here, '../Azizbek')
-const ALLOWED_FILES = new Set(['Journey questions.md', 'Tips.md', 'Tasks.md', 'Extra details.md', 'About me.md'])
+const ALLOWED_FILES = new Set(['Journey questions.md', 'Tips.md', 'Tasks.md', 'Extra details.md', 'About me.md', 'Coach instructions.md'])
 
 function sendJson(res, code, obj) {
   if (res.headersSent) return
@@ -119,7 +119,7 @@ async function vaultMiddleware(req, res, next) {
         }
         return
       }
-      if (req.method === 'PUT') {
+      if (req.method === 'PUT' || req.method === 'POST') {
         let body = ''
         try { body = await readBody(req) } catch (e) { return sendJson(res, 413, { error: String(e.message || e) }) }
         const { file, content } = JSON.parse(body || '{}')
@@ -182,7 +182,8 @@ function aiMiddleware(AI) {
         for (const m of messages) {
           if (!m || typeof m.role !== 'string' || typeof m.content !== 'string') throw new Error('bad message shape')
         }
-        const payload = { model: parsed.model || AI.model, stream: true, messages }
+        const wantStream = parsed.stream !== false
+        const payload = { model: parsed.model || AI.model, stream: wantStream, messages }
         if (typeof parsed.temperature === 'number') payload.temperature = parsed.temperature
 
         let up
@@ -204,6 +205,14 @@ function aiMiddleware(AI) {
           return sendJson(res, 502, { error: `AI upstream ${up.status}: ${String(detail).slice(0, 600)}` })
         }
         if (!up.body) return sendJson(res, 502, { error: 'AI upstream returned no body' })
+
+        // Non-streamed request → pass through the upstream JSON response.
+        if (!wantStream) {
+          const raw = await up.text()
+          res.setHeader('Content-Type', 'application/json; charset=utf-8')
+          res.end(raw)
+          return
+        }
 
         res.statusCode = 200
         res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')

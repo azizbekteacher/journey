@@ -12,7 +12,7 @@ import { Combat } from "./combat.js"
 import { initVaultSync, saveTip } from "./obsidian.js"
 import { showPlan, savePlanToVault } from "./plan.js"
 import { todo } from "./todo.js"
-import { initAI } from "./ai.js"
+import { initAI, fetchBonusQuestion } from "./ai.js"
 import { FACTS, BATTLES, BOSS, COIN_LESSONS, ZONES } from "./data/curriculum.js"
 import { S, saveGame, loadGame, progressCount, MAX_HEARTS } from "./state.js"
 import { audio } from "./audio.js"
@@ -107,7 +107,7 @@ const enemyMgr = new EnemyManager(scene, fx, {
         $("fade").classList.remove("on")
       }, 900)
     } else {
-      toast("\u2694 The guardian strikes! Raise your shield with Right Mouse.")
+      toast("\u2694 The guardian strikes! Gather yourself, founder.")
     }
   },
   onPerfectBlock() {
@@ -199,15 +199,31 @@ function initTodo() {
     else todo.openOverlay()
   })
   $("todo-close").addEventListener("click", () => todo.closeOverlay())
+  window.addEventListener("open-todo", () => {
+    if (combat.open) combat.setTab("todo")
+    else todo.openOverlay()
+  })
+
+  $("deed-addtask").addEventListener("click", () => {
+    const item = deedState.item
+    const q = deedState.bonusQuestion || item?.label || "New deed"
+    const ans = ($("bonus-answer").value || "").trim()
+    const desc = ans || ($("deed-text").textContent || "")
+    todo.addQuickDeed({ title: q, desc })
+    toast(`✒ "${q.slice(0, 60)}${q.length > 60 ? "…" : ""}" written to Tasks.md`)
+    if (ans && item) {
+      S.gold += 5
+      saveGame()
+      updateHUD()
+      toast("🎁 +5 gold — the Owl smiles")
+    }
+    $("deed").classList.add("hidden")
+    document.getElementById("game")?.requestPointerLock?.()
+  })
   $("deed-create").addEventListener("click", () => {
     $("deed").classList.add("hidden")
-    todo.openOverlay()
-    setTimeout(() => {
-      const newBtn = document.querySelector(".todo-app .ta-new")
-      newBtn?.click()
-      const title = document.querySelector("#qa-title")
-      if (title) title.focus()
-    }, 60)
+    const item = deedState.item
+    todo.startNewDeed(item ? `${item.label} — rebuild or begin` : "")
   })
   $("deed-open").addEventListener("click", () => {
     $("deed").classList.add("hidden")
@@ -217,24 +233,73 @@ function initTodo() {
     $("deed").classList.add("hidden")
     document.getElementById("game")?.requestPointerLock?.()
   })
+
+  $("coin-addtask").addEventListener("click", () => {
+    const t = coinState.title, tip = coinState.tip
+    const thought = ($("coin-thought").value || "").trim()
+    todo.addQuickDeed({ title: t, desc: thought || tip })
+    toast(`✒ "${String(t).slice(0, 60)}" added to the ledger`)
+    $("coin-card").classList.add("hidden")
+  })
+
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       if (todo.active === "overlay") { todo.closeOverlay(); e.stopPropagation() }
       else if (!$("deed").classList.contains("hidden")) { $("deed").classList.add("hidden"); document.getElementById("game")?.requestPointerLock?.() }
+      else if (!$("coin-card").classList.contains("hidden")) { $("coin-card").classList.add("hidden") }
     }
   })
 }
 
+const BONUS_FALLBACK = [
+  "If you had only $50 this month, where would you put it to earn the next student?",
+  "Which of your last ten students would you clone, and why exactly?",
+  "What is the one sentence a student must hear on your first trial lesson?",
+  "Which objection do you hear most — and what is the honest answer to it?",
+  "If your Telegram channel vanished tomorrow, where would students find you?",
+  "What proof of a student win could you collect this very week?",
+  "Who on your team would you trust to run the Monday scoreboard?",
+  "What does your course make a student capable of in 90 days — in one line?"
+]
+
+let deedState = { item: null, bonusQuestion: null }
+
 function showDeedPopup(item) {
-  const isTree = item.kind === "tree"
+  deedState.item = item
+  deedState.bonusQuestion = null
+  $("bonus-answer").value = ""
   $("deed-icon").textContent = item.icon
+  const isTree = item.kind === "tree"
   $("deed-title").textContent = isTree ? `${item.label} is felled` : `${item.label} lies in ruins`
   $("deed-text").textContent = isTree
     ? "The wood is cleared. A deed waits to be written — what shall you build, cut down, or begin in this quarter?"
     : "Bricks and beam fall to your blade. Every ruin is a question: what will you rebuild here before the quarter ends?"
+  // ~60% chance the Owl gifts a bonus question (AI, else a fallback).
+  const withBonus = Math.random() < 0.6
+  $("deed-bonus").classList.toggle("hidden", !withBonus)
+  if (withBonus) {
+    $("bonus-q").textContent = "…"
+    loadBonusQuestion(item)
+  }
   $("deed").classList.remove("hidden")
   document.exitPointerLock?.()
   audio.page()
+}
+
+async function loadBonusQuestion(item) {
+  let q = ""
+  try {
+    q = await fetchBonusQuestion(`I just felled a ${item.label}. Give me a bonus question tied to my business.`)
+  } catch (e) {
+    q = ""
+  }
+  if (!q) {
+    const pool = BONUS_FALLBACK
+    q = pool[(pool.length * Math.random()) | 0]
+  }
+  deedState.bonusQuestion = q
+  const el = $("bonus-q")
+  if (el) el.textContent = q
 }
 const ai = initAI()
 if (loaded) {
@@ -300,9 +365,13 @@ function toast(text) {
   setTimeout(() => el.remove(), 4300)
 }
 
+const coinState = { title: "", tip: "" }
 function showCard(title, tip, ms = 6000) {
+  coinState.title = title
+  coinState.tip = tip
   $("coin-title").textContent = title
   $("coin-tip").textContent = tip
+  $("coin-thought").value = ""
   $("coin-card").classList.remove("hidden")
   clearTimeout(showCard.t)
   showCard.t = setTimeout(() => $("coin-card").classList.add("hidden"), ms)
@@ -388,7 +457,7 @@ window.addEventListener("keyup", (e) => { if (e.code === "KeyE") eDown = false }
 
 function tryChallenge() {
   if (combat.open || ai.isOpen() || !$("title").classList.contains("hidden")) return
-  if (!$("todo").classList.contains("hidden") || !$("deed").classList.contains("hidden")) return
+  if (!$("todo").classList.contains("hidden") || !$("deed").classList.contains("hidden") || !$("ai-instr").classList.contains("hidden")) return
   const e = enemyMgr.near
   if (!e) return
   if (!e.battle) {
@@ -551,7 +620,7 @@ function animate() {
   sun.position.set(player.pos.x - 60, player.pos.y + 80, player.pos.z + 70)
   sun.target.position.copy(player.pos)
   sun.target.updateMatrixWorld()
-  const uiOpen = combat.open || ai.isOpen() || !$("title").classList.contains("hidden") || !$("plan").classList.contains("hidden") || !$("win").classList.contains("hidden") || !$("todo").classList.contains("hidden") || !$("deed").classList.contains("hidden")
+  const uiOpen = combat.open || ai.isOpen() || !$("title").classList.contains("hidden") || !$("plan").classList.contains("hidden") || !$("win").classList.contains("hidden") || !$("todo").classList.contains("hidden") || !$("deed").classList.contains("hidden") || !$("ai-instr").classList.contains("hidden")
   enemyMgr.update(dt, t, player, uiOpen)
   regenTick(rawDt, uiOpen)
   updateWorld(t, dt, fx)
@@ -621,7 +690,7 @@ function animate() {
       const sd = player.pos.distanceTo(new THREE.Vector3(24, player.pos.y, 27))
       if (S.horseUnlocked && sd < 12 && !player.mounted) setHint("[ H ] Mount Thunder")
       else if (!S.horseUnlocked && progressOf() < 7) setHint(`Reach 7/20 truths to earn Thunder the horse (${progressOf()}/7)`)
-      else if (enemyMgr.engaged(player.pos)) setHint("[ Space ] Sword · [ C ] Roll · [ RMB ] Shield")
+      else if (enemyMgr.engaged(player.pos)) setHint("[ Space ] Sword · [ C ] Roll · [ RMB ] Ledger")
       else setHint(null)
     }
     const z = zoneAt(player.pos.x, player.pos.z)

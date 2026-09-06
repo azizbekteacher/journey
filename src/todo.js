@@ -10,6 +10,8 @@
 //   - polls the vault while visible so edits made in Obsidian appear live.
 //   - offline / production fallback mirrors to localStorage and re-syncs later.
 
+import { VAULT_BASE } from "./net.js"
+
 const FILE = "Tasks.md"
 const BACKUP_KEY = "journey_tasks_v1"
 const POLL_MS = 2200
@@ -230,9 +232,11 @@ const led = {
   sections: [],
   view: "list",                 // 'list' | 'board'
   active: "none",               // 'none' | 'overlay' | 'battle'
-  collapsed: new Set(),
+  collapsed: new Set(),         // section ids
+  taskCollapsed: new Set(),     // task ids whose subtasks are hidden
   editingId: null,
   addingSecId: null,
+  presetTitle: null,            // suggested title for the open add-box
   busy: false,
   _serverMtime: null,
   _pendingWrite: false,
@@ -313,7 +317,7 @@ async function writeNow() {
   led._pendingWrite = true
   syncDot("saving")
   try {
-    const r = await api("/api/vault/file?file=" + FILE, {
+    const r = await api(VAULT_BASE + "/api/vault/file?file=" + FILE, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ file: FILE, content: text })
@@ -340,7 +344,7 @@ async function reloadFromServer(silent = true) {
     return
   }
   try {
-    const r = await api("/api/vault/file?file=" + FILE)
+    const r = await api(VAULT_BASE + "/api/vault/file?file=" + FILE)
     const text = typeof r.content === "string" ? r.content : ""
     const wasEditing = led.editingId
     const openEditing = led.editingId && taskById(led.editingId)
@@ -370,7 +374,7 @@ async function init() {
   // Try vault first; fall back to local mirror if unreachable
   let loaded = false
   try {
-    const r = await api("/api/vault/file?file=" + FILE)
+    const r = await api(VAULT_BASE + "/api/vault/file?file=" + FILE)
     const text = typeof r.content === "string" ? r.content : ""
     led.sections = parseMarkdown(text)
     led._serverMtime = r.mtime ?? null
@@ -392,13 +396,25 @@ async function init() {
       else if (led.dirty) scheduleSave(true)
     }
   })
+  // Best-effort flush when the page is closed / reloaded so a just-added
+  // subtask is never lost (POST is accepted by the vault middleware, so
+  // navigator.sendBeacon works even though it can only send POST).
+  window.addEventListener("pagehide", () => {
+    if (!led.dirty) return
+    try {
+      const text = serializeMarkdown(led.sections)
+      storeBackup(text, led._serverMtime)
+      const blob = new Blob([JSON.stringify({ file: FILE, content: text })], { type: "application/json" })
+      navigator.sendBeacon(VAULT_BASE + "/api/vault/file?file=" + FILE, blob)
+    } catch (e) {}
+  })
 }
 
 function startPolling() {
   stopPolling()
   led._pollTimer = setInterval(async () => {
     try {
-      const r = await api("/api/vault/file/head?file=" + FILE)
+      const r = await api(VAULT_BASE + "/api/vault/file/head?file=" + FILE)
       const remote = r.mtime ?? null
       if (remote !== null && led._serverMtime !== null && remote !== led._serverMtime && !led._pendingWrite) {
         await reloadFromServer()
@@ -509,13 +525,18 @@ function metaChipsHtml(t, showDue = true) {
 }
 
 function taskRowHtml(t, depth) {
-  const subRow = t.subs.length
-    ? `<div class="tl-nest">${t.subs.map((s) => taskRowHtml(s, depth + 1)).join("")}</div>` : ""
+  const hasSubs = t.subs.length > 0
+  const collapsed = led.taskCollapsed.has(t.id)
+  const caret = hasSubs
+    ? `<button class="tl-caret-task" data-act="tsub" data-id="${t.id}" title="${collapsed ? "Show steps" : "Hide steps"}">${collapsed ? "▸" : "▾"}</button>`
+    : `<span class="tl-caret-task spacer"></span>`
+  const subRow = hasSubs
+    ? `<div class="tl-nest${collapsed ? " hidden" : ""}" data-parent="${t.id}">${t.subs.map((s) => taskRowHtml(s, depth + 1)).join("")}</div>` : ""
   const dueMeta = t.due ? `<div class="tl-duerow">${metaChipsHtml(t)}</div>` : ""
-  const descShown = t.desc && !t.done
   const dots = t.done ? " tl-done" : ""
   return `
   <div class="tl-row${dots}" data-id="${t.id}" data-depth="${depth}" data-root="${t.root ? 1 : 0}" ${t.root ? 'draggable="true"' : ""}>
+    ${caret}
     <button class="tl-check ${t.done ? "on" : ""}" data-act="toggle" data-id="${t.id}" title="${t.done ? "Mark as open" : "Complete"}" aria-label="toggle">${CHECK_HTML}</button>
     <div class="tl-main" data-act="edit" data-id="${t.id}" title="Edit">
       <div class="tl-titlewrap">
@@ -636,7 +657,12 @@ function renderAddBox() {
       </div>
     </div>`
   const title = box.querySelector("#qa-title")
-  if (title) { title.focus(); title.select?.() }
+  if (title) {
+    if (led.presetTitle) title.value = led.presetTitle
+    title.focus()
+    if (!led.presetTitle) title.select?.()
+  }
+  led.presetTitle = null
 }
 
 function renderEditor() {
@@ -692,15 +718,20 @@ function renderEditor() {
   const secEl = host.querySelector("#ed-sec")
   if (secEl && sec) secEl.addEventListener("change", (e) => { moveRootTo(secEl.value, t.id, true); })
   for (const inp of host.querySelectorAll(".ta-sub-title")) {
-    inp.addEventListener("change", (e) => {
+    const commit = (e) => {
       const st = taskById(e.target.dataset.id)
       if (st) st.title = e.target.value
-      markChanged()
-    })
+      markChanged(true)
+    }
+    inp.addEventListener("change", commit)
     inp.addEventListener("keydown", (e) => { if (e.key === "Enter") e.target.blur() })
   }
   const newSub = host.querySelector("#ed-newsub")
-  if (newSub) newSub.addEventListener("keydown", (e) => { if (e.key === "Enter") addSubtask(t.id, e.target.value) })
+  if (newSub) {
+    newSub.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); addSubtask(t.id, e.target.value) }
+    })
+  }
 }
 
 function addSubtask(parentId, rawTitle) {
@@ -714,8 +745,13 @@ function addSubtask(parentId, rawTitle) {
   })
   const input = document.getElementById("ed-newsub")
   if (input) input.value = ""
-  markChanged()
+  markChanged(true)
   render()
+  // stay in the subtask editor, ready for the next step (Enter → add → type again)
+  setTimeout(() => {
+    const s2 = document.getElementById("ed-newsub")
+    if (s2) s2.focus()
+  }, 0)
 }
 
 function deleteTask(id) {
@@ -732,7 +768,7 @@ function deleteTask(id) {
 }
 function finishDelete(id) {
   if (led.editingId === id) led.editingId = null
-  markChanged()
+  markChanged(true)
   render()
 }
 
@@ -743,7 +779,7 @@ function createTask(secId, { title = "", desc = "", due = null, pri = null } = {
     title: String(title || "").trim(), due, pri, desc: String(desc || "").trim(), subs: []
   }
   sec.children.push(node)
-  markChanged()
+  markChanged(true)
   return node
 }
 
@@ -757,7 +793,7 @@ function toggleTask(id) {
     const rec = (n, val) => { n.done = val; for (const s of n.subs) rec(s, val) }
     rec(t, true)
   }
-  markChanged()
+  markChanged(true)
   led.onTick?.(t, nowDone)
   return t
 }
@@ -777,7 +813,7 @@ function moveRootTo(secId, taskId, toEnd = true, beforeId = null) {
   } else {
     dstSec.children.push(src.node)
   }
-  markChanged()
+  markChanged(true)
   return true
 }
 
@@ -830,13 +866,26 @@ function bindAppEvents() {
         if (led.collapsed.has(secId)) led.collapsed.delete(secId); else led.collapsed.add(secId)
         render(); break
       }
+      case "tsub": {
+        if (led.taskCollapsed.has(id)) led.taskCollapsed.delete(id); else led.taskCollapsed.add(id)
+        render(); break
+      }
       case "secadd": {
         // add to specific section (or create Inbox)
         if (secId) { led.addingSecId = secId } else { ensureInbox(); led.addingSecId = led.sections[0].id }
         led.view = "list"; render(); break
       }
       case "add": ensureInbox(); led.addingSecId = (led.sections.find((s) => s.title !== null) || led.sections[0]).id; render(); break
-      case "subadd": addSubtask(id, ""); render(); break
+      case "subadd": {
+        // open the editor on the parent so the user can type a step
+        led.editingId = id
+        render()
+        setTimeout(() => {
+          const s2 = document.getElementById("ed-newsub")
+          if (s2) { s2.focus() }
+        }, 0)
+        break
+      }
       case "add-cancel": led.addingSecId = null; render(); break
       case "add-ok": {
         const box = document.getElementById("ta-addbox")
@@ -844,7 +893,7 @@ function bindAppEvents() {
         const desc = box?.querySelector("#qa-desc")?.value || ""
         const due = box?.querySelector("#qa-due")?.value || null
         const pri = box?.querySelector("#qa-pri")?.value || null
-        const sec = led.sections.find((s) => s.id === led.addingSecId) || ensureInbox()
+        const sec = led.sections.find((s) => s.id === led.addingSecId && s.title !== null) || ensureInbox()
         const t = createTask(sec.id, { title, desc, due, pri })
         led.addingSecId = null
         render()
@@ -923,12 +972,28 @@ function addQuickDeed({ title, desc = "", due = null, pri = null, section = null
   return node
 }
 
+/** Open the ledger straight into the "new deed" form with a suggested title. */
+function startNewDeed(title = "") {
+  if (led.active === "battle") closeAll()
+  openOverlay()
+  ensureInbox()
+  led.addingSecId = (led.sections.find((s) => s.title !== null) || led.sections[0]).id
+  led.presetTitle = title
+  led.view = "list"
+  render()
+  setTimeout(() => {
+    const t2 = document.getElementById("qa-title")
+    if (t2) t2.focus()
+  }, 30)
+}
+
 export const todo = {
   init,
   openOverlay,
   openInBattle,
   closeAll,
   closeOverlay,
+  startNewDeed,
   get visible() { return led.active !== "none" },
   get active() { return led.active },
   render,

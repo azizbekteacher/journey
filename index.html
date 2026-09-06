@@ -22,7 +22,7 @@
     <div id="hud-stamina"><div id="hud-stamina-fill"></div></div>
     <div id="hud-right">
       <div id="hud-progress">📜 0/20</div>
-      <div id="obsidian-status" data-state="queued" title="Obsidian vault sync (writes to C:\Users\bluep\Azizbek when running locally)">○ Obsidian</div>
+      <div id="todo-pill" data-state="synced" title="Tasks.md sync — source of truth: C:\Users\bluep\Azizbek\Tasks.md">● Tasks.md</div>
     </div>
     <button id="ai-toggle" class="ai-toggle" title="AI Business Coach — reads your Obsidian vault">✨</button>
     <div id="hud-hint" class="hidden"></div>
@@ -40,6 +40,7 @@
           <div class="ai-sub">reads your Obsidian vault · coaches your business · saves new facts to <i>Extra details</i></div>
         </div>
         <div id="ai-status" class="ai-status" data-state="off">○ offline</div>
+        <button id="ai-edit" class="btn-soft ai-edit" title="Edit the Coach's instructions">✎ Edit</button>
         <button id="ai-close" class="btn-soft ai-close" title="Close the Coach">✕</button>
       </div>
       <div id="ai-messages" class="ai-messages"></div>
@@ -51,8 +52,25 @@
     </div>
   </div>
 
+  <div id="ai-instr" class="overlay hidden">
+    <div class="ai-instr-panel">
+      <div class="ai-instr-head">
+        <span class="ai-seal">🦉</span>
+        <h2>Coach Instructions</h2>
+        <button id="ai-instr-close" class="btn-soft ai-close">✕</button>
+      </div>
+      <p class="ai-instr-sub">Edit how the Coach should respond. Saved to <i>Coach instructions.md</i> in your vault.</p>
+      <textarea id="ai-instr-text" rows="14" spellcheck="false"></textarea>
+      <div class="ai-instr-actions">
+        <button id="ai-instr-cancel" class="btn-soft">Cancel</button>
+        <button id="ai-instr-save" class="btn-gold">Save instructions</button>
+      </div>
+    </div>
+  </div>
+
   <div id="battle" class="overlay hidden">
     <div class="battle-panel">
+      <button id="b-close" class="battle-x" title="Leave the quiz (the guardian wakes)">✕</button>
       <div class="battle-head">
         <span id="b-icon" class="battle-icon">🐀</span>
         <div class="battle-title">
@@ -90,8 +108,15 @@
   </div>
 
   <div id="coin-card" class="hidden">
-    <div class="coin-title" id="coin-title"></div>
-    <div class="coin-tip" id="coin-tip"></div>
+    <div class="coin-head">
+      <span class="coin-head-icon">🪙</span>
+      <span id="coin-title" class="coin-title"></span>
+      <button id="coin-addtask" class="coin-addtask" title="Add this as a deed in your ledger">＋ Add to task</button>
+    </div>
+    <div class="coin-body">
+      <div id="coin-tip" class="coin-tip"></div>
+      <textarea id="coin-thought" rows="2" placeholder="Fikr yozish… (write your thought here)"></textarea>
+    </div>
   </div>
 
   <div id="todo" class="overlay hidden">
@@ -109,12 +134,22 @@
 
   <div id="deed" class="overlay hidden">
     <div class="deed-panel">
-      <div class="deed-icon" id="deed-icon">🌳</div>
-      <h3 id="deed-title"></h3>
-      <p id="deed-text" class="deed-text"></p>
+      <div class="coin-head deed-head">
+        <span class="coin-head-icon" id="deed-icon">🌳</span>
+        <h3 id="deed-title" class="coin-title"></h3>
+        <button id="deed-open" class="coin-addtask" title="Open the Ledger of Deeds">📜 Ledger</button>
+      </div>
+      <div class="coin-body">
+        <p id="deed-text" class="deed-text"></p>
+        <div id="deed-bonus" class="deed-bonus hidden">
+          <div class="bonus-q-label">🎁 Bonus question from the Owl</div>
+          <div id="bonus-q" class="bonus-q">…</div>
+          <textarea id="bonus-answer" rows="2" placeholder="Fikr yozish… (your answer becomes a deed)"></textarea>
+        </div>
+      </div>
       <div class="deed-actions">
-        <button id="deed-create" class="btn-gold">✍ Write a deed</button>
-        <button id="deed-open" class="btn-soft">📜 Open Ledger</button>
+        <button id="deed-addtask" class="btn-gold">＋ Add as deed</button>
+        <button id="deed-create" class="btn-soft">✍ Write a deed</button>
         <button id="deed-dismiss" class="btn-soft">Dismiss</button>
       </div>
     </div>
@@ -156,7 +191,7 @@
         ready to forge your quarterly marketing plan. But first he must know everything about you.
         Twenty guardians hold twenty questions. Ride out. Answer honestly. The Bull Market guards the gate.</p>
       <div class="title-controls">
-        <span><b>WASD</b> ride</span><span><b>Mouse</b> look</span><span><b>LMB</b> attack</span><span><b>RMB</b> defend</span>
+        <span><b>WASD</b> ride</span><span><b>Mouse</b> look</span><span><b>LMB</b> attack</span><span><b>RMB</b> ledger</span>
         <span><b>Shift</b> sprint</span><span><b>C</b> roll</span><span><b>E</b> answer (after knockdown)</span><span><b>H</b> horse (7/20)</span><span><b>Space</b> also attacks</span>
       </div>
       <button id="btn-begin" class="btn-gold big">Begin the Quest</button>

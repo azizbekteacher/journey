@@ -148,12 +148,15 @@ function registerDestroyable(parent, group, { kind, label, icon = "🌳", hp = 1
 function makeRuins(item) {
   const g = new THREE.Group()
   const stoneCols = ["#8d8a80", "#9b9484", "#7d786c"]
+  const woodCols = ["#6b4a30", "#7a5a3d", "#8a6a44"]
   const blocks = []
-  const n = item.kind === "house" ? 7 : 2
+  const isWood = item.kind === "tree" || item.kind === "barrel" || item.kind === "stall" || item.kind === "hay"
+  const n = item.kind === "house" ? 7 : isWood ? 3 : 2
+  const cols = isWood ? woodCols : stoneCols
   for (let i = 0; i < n; i++) {
-    const m = box(0.6 + Math.random() * 1.1, 0.5 + Math.random() * 0.8, 0.6 + Math.random() * 1.1, stoneCols[i % stoneCols.length])
-    m.position.set((Math.random() - 0.5) * item.rx, 0.2, (Math.random() - 0.5) * item.rz)
-    m.rotation.set((Math.random() - 0.5) * 0.3, Math.random() * Math.PI, (Math.random() - 0.5) * 0.3)
+    const m = box(0.4 + Math.random() * 0.7, 0.4 + Math.random() * 0.6, 0.4 + Math.random() * 0.7, cols[i % cols.length])
+    m.position.set((Math.random() - 0.5) * item.rx, 0.15, (Math.random() - 0.5) * item.rz)
+    m.rotation.set((Math.random() - 0.5) * 0.4, Math.random() * Math.PI, (Math.random() - 0.5) * 0.4)
     g.add(m)
     blocks.push(m)
   }
@@ -853,6 +856,7 @@ function buildVillage(parent) {
     stall.position.set(i ? 8 : -8, 0, 20)
     stall.rotation.y = i ? -0.5 : 0.5
     v.add(stall)
+    registerDestroyable(v, stall, { kind: "stall", label: i ? "The Crimson Stall" : "The Green Stall", icon: "⛺", hp: 1, rx: 2.4, rz: 1.8 })
   }
 
   const board = new THREE.Group()
@@ -1181,6 +1185,7 @@ function buildPlains(parent) {
     hay.rotation.y = Math.random() * Math.PI
     hay.castShadow = true
     parent.add(hay)
+    registerDestroyable(parent, hay, { kind: "hay", label: "Hay Bale", icon: "🌾", hp: 1, rx: 1.4, rz: 1.4 })
   }
 }
 
@@ -1477,6 +1482,7 @@ function buildProps(parent) {
       brl.rotation.y = Math.random() * Math.PI * 2
       brl.traverse(o => { if (o.isMesh) o.castShadow = true })
       parent.add(brl)
+      registerDestroyable(parent, brl, { kind: "barrel", label: "Merchant's Barrel", icon: "🛢️", hp: 1, rx: 1, rz: 1 })
     }
   }
 
@@ -1646,7 +1652,8 @@ export function updateWorld(t, dt, fx) {
       d.t += dt
       const k = Math.min(1, d.t / d.dur)
       const ease = k < 0.6 ? k / 0.6 : 1 - Math.pow(1 - (k - 0.6) / 0.4, 2)
-      const drop = (d.item.kind === "tree" ? 3.4 : 4.5) * ease
+      const dropMap = { tree: 3.4, house: 4.5, stall: 2.8, barrel: 1.4, hay: 1.3 }
+      const drop = (dropMap[d.item.kind] ?? 2) * ease
       d.item.group.position.y = d.item.y - drop
       const scale = d.item.kind === "tree" ? Math.max(0.05, 1 - k) : Math.max(0.3, 1 - k * 0.7)
       d.item.group.scale.setScalar(scale)

@@ -1,12 +1,13 @@
 // Obsidian vault sync — writes answers to "Journey questions.md" and tips to
 // "Tips.md" inside the vault at C:\Users\bluep\Azizbek (sibling of the game dir).
 //
-// Transport: same-origin POST /api/vault/upsert served by a Vite dev-server
-// plugin (see vite.config.js) that reads/writes the real files on disk.
-// In production (CF Worker) that endpoint does not exist, so writes are queued
-// in localStorage and flushed on the next local dev run.
+// Transport: the /api/vault/* endpoints — served by the Vite dev plugin on
+// localhost (vite.config.js) and by the loopback bridge (npm run bridge) from
+// the deployed Cloudflare page. See src/net.js. Writes that can't reach either
+// are queued in localStorage and flushed later.
 
 import { BATTLES, BOSS, MODULE_NAMES } from "./data/curriculum.js"
+import { VAULT_BASE } from "./net.js"
 
 export const VAULT_FILES = {
   questions: "Journey questions.md",
@@ -62,7 +63,7 @@ function withTimeout() {
 }
 
 async function postUpsert(file, key, markdown) {
-  const r = await fetch("/api/vault/upsert", {
+  const r = await fetch(VAULT_BASE + "/api/vault/upsert", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ file, key, markdown }),
@@ -117,7 +118,7 @@ export async function flushVaultQueue() {
 
 export async function probeVault() {
   try {
-    const r = await fetch("/api/vault/status", { ...withTimeout() })
+    const r = await fetch(VAULT_BASE + "/api/vault/status", { ...withTimeout() })
     if (!r.ok) throw new Error("status " + r.status)
     await r.json().catch(() => ({}))
     return flushVaultQueue()

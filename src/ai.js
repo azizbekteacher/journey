@@ -2,18 +2,17 @@
 //
 //   - reads the whole vault (About me, Extra details, Journey questions, Tips)
 //     so it coaches against your CURRENT state
-//   - streams replies live through the local Vite proxy (vite.config.js),
-//     which calls the OpenAI-compatible API using .env (never exposed here)
+//   - streams replies live through the Vite proxy in dev (vite.config.js) or
+//     the Cloudflare Worker in production (worker.js); both call the
+//     OpenAI-compatible API, with the key kept server-side (never exposed here)
 //   - the model is told to emit NEW facts about you / your business inside an
 //     [EXTRA_FACTS] block; we strip that block from the chat and append the
 //     facts to "Extra details.md" automatically (deduped)
 //   - right-click a selection inside any message → small "📌 Create a task"
 //     button floats above it; clicking appends "- [ ] …" to "Tasks.md"
-//
-// Local dev only: the Cloudflare Worker has no /api/ai route, so on production
-// the panel reports itself offline.
 
 import { FACTS, BATTLES, BOSS, MODULE_NAMES } from "./data/curriculum.js"
+import { VAULT_BASE } from "./net.js"
 
 const $ = (id) => document.getElementById(id)
 const CHAT_KEY = "journey_ai_chat_v1"
@@ -50,7 +49,7 @@ async function api(path, opts = {}) {
 
 async function readVaultFile(file) {
   try {
-    const r = await api("/api/vault/file?file=" + encodeURIComponent(file))
+    const r = await api(VAULT_BASE + "/api/vault/file?file=" + encodeURIComponent(file))
     return { text: typeof r.content === "string" ? r.content : "", ok: true }
   } catch (e) {
     return { text: "", ok: false }
@@ -61,10 +60,29 @@ async function appendToFile(file, block) {
   const { text, ok } = await readVaultFile(file)
   if (!ok) return false
   const body = text.endsWith("\n") ? text + block : text ? text + "\n" + block : block
-  await api("/api/vault/file?file=" + encodeURIComponent(file), {
+  await api(VAULT_BASE + "/api/vault/file?file=" + encodeURIComponent(file), {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ file, content: body })
+    body: JSON.stringify({ file: file, content: body })
+  })
+  return true
+}
+
+const INSTRUCTIONS_FILE = "Coach instructions.md"
+
+async function loadInstructions() {
+  try {
+    const { text, ok } = await readVaultFile(INSTRUCTIONS_FILE)
+    return ok ? String(text || "").trim() : ""
+  } catch (e) { return "" }
+}
+
+async function saveInstructions(text) {
+  const body = String(text || "").trim()
+  await api(VAULT_BASE + "/api/vault/file?file=" + encodeURIComponent(INSTRUCTIONS_FILE), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ file: INSTRUCTIONS_FILE, content: body })
   })
   return true
 }
@@ -240,6 +258,42 @@ async function streamChat(messages, onToken) {
   if (buf.trim()) feed(buf)
 }
 
+// ------------------------------------------------------ bonus questions -----
+
+/** Ask the model for one bonus business question tied to the player's state. */
+async function genBonusQuestion(prompt) {
+  const digest = await buildContext()
+  const facts = FACTS.map((f) => `- ${f.title}: ${f.text}`).join("\n")
+  const system = [
+    "You are the Chief Marketing Owl in the game 'Journey — The CMO's Quest'.",
+    "Generate ONE sharp, concrete marketing question for the founder of an online English school for Uzbek learners (he is the founder).",
+    "Base it on his CURRENT vault state below; do not invent numbers that are not there — if the vault is thin, ask a foundational question.",
+    "The question must be answerable in 1–4 sentences. End your reply with the question on its own line prefixed by QUESTION:.",
+    "",
+    "Known facts:",
+    facts,
+    "",
+    "His current state:",
+    digest.trim() ? digest : "(vault empty so far)",
+  ].join("\n")
+  const res = await fetch("/api/ai/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ messages: [{ role: "system", content: system }, { role: "user", content: String(prompt || "Ask me a question about my business.") }], stream: false }),
+    ...withTimeout(60000)
+  })
+  if (!res.ok) {
+    const t = await res.text().catch(() => "")
+    throw new Error(t ? t.slice(0, 300) : "AI request failed (" + res.status + ")")
+  }
+  const j = await res.json().catch(() => ({}))
+  const text = (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || ""
+  let question = text.split(/\r?\n/).filter((l) => l.trim().startsWith("QUESTION:")).map((l) => l.replace(/^QUESTION:\s*/i, "").trim()).join("\n")
+  if (!question) question = text.trim()
+  question = question.replace(/\s+/g, " ").slice(0, 300)
+  return question
+}
+
 // ---------------------------------------------------------- fact capture ----
 
 function stripFactBlock(text) {
@@ -287,6 +341,38 @@ function init() {
   const status = $("ai-status")
   const msgsEl = $("ai-messages")
   if (!panel || !toggle) return null
+
+  // ---- edit instructions modal ----
+  const instrPanel = $("ai-instr")
+  const instrText = $("ai-instr-text")
+  const instrSave = $("ai-instr-save")
+  const instrCancel = $("ai-instr-cancel")
+  const instrClose = $("ai-instr-close")
+  const editBtn = $("ai-edit")
+  const openInstr = async () => {
+    if (!instrPanel) return
+    let cur = await loadInstructions()
+    if (!cur.trim()) cur = buildSystemPrompt("")
+    instrText.value = cur
+    instrPanel.classList.remove("hidden")
+    document.exitPointerLock?.()
+  }
+  const closeInstr = () => { if (instrPanel) instrPanel.classList.add("hidden") }
+  if (editBtn) editBtn.addEventListener("click", openInstr)
+  if (instrCancel) instrCancel.addEventListener("click", closeInstr)
+  if (instrClose) instrClose.addEventListener("click", closeInstr)
+  if (instrSave) instrSave.addEventListener("click", async () => {
+    try {
+      await saveInstructions(instrText.value)
+      toast("🦉 Coach instructions saved to Coach instructions.md")
+      closeInstr()
+    } catch (e) {
+      toast("⚠ Could not save instructions: " + String(e.message || e))
+    }
+  })
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && instrPanel && !instrPanel.classList.contains("hidden")) closeInstr()
+  })
 
   const coach = {
     msgs: loadChat(),
@@ -389,7 +475,7 @@ function init() {
   const send = async (text) => {
     if (coach.streaming) return
     if (coach.configured === false) {
-      toast("⚠ The AI Coach is not configured — set AI_API_KEY / AI_MODEL in the project .env and restart.")
+      toast("⚠ The AI Coach is not configured — set AI_BASE_URL / AI_API_KEY / AI_MODEL in .env (dev) or the Cloudflare Worker (production).")
       return
     }
     coach.msgs.push({ role: "user", content: String(text).trim() })
@@ -406,7 +492,8 @@ function init() {
     let acc = ""
     try {
       const digest = await buildContext()
-      const system = buildSystemPrompt(digest)
+      let system = await loadInstructions()
+      if (!system.trim()) system = buildSystemPrompt(digest)
       const messages = [{ role: "system", content: system }, ...coach.msgs.slice(-MAX_HISTORY)]
       await streamChat(messages, (tok) => {
         acc += tok
@@ -519,4 +606,9 @@ export function initAI(handlers) {
   } catch (e) {
     return { isOpen: () => false, open() {}, close() {}, status: "off" }
   }
+}
+
+/** Fetch an AI-generated bonus question; throws when AI is unavailable. */
+export async function fetchBonusQuestion(prompt) {
+  return genBonusQuestion(prompt)
 }

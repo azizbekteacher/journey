@@ -10,7 +10,7 @@ export const S = {
   hearts: MAX_HEARTS,
   horseUnlocked: false,
   bossDone: false,
-  soundOn: true
+  soundOn: false
 }
 
 export function saveGame() {

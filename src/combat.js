@@ -42,6 +42,26 @@ export class Combat {
     })
     $("btab-question").addEventListener("click", () => this.setTab("question"))
     $("btab-todo").addEventListener("click", () => this.setTab("todo"))
+    $("b-close").addEventListener("click", () => this.flee())
+  }
+
+  /** Leave a quiz without inscribing: the enemy wakes for another fight. */
+  flee() {
+    if (!this.open) return
+    const e = this.current?.enemy
+    clearInterval(this.timerId)
+    if (e) {
+      // wake the enemy so it can be fought again, restoring its pose
+      e.down = false
+      e.state = "idle"
+      e.hp = e.maxHp
+      e.flinchT = -1
+      e.staggerT = -1
+      e.chargeState = "none"
+      if (e.model) { e.model.rotation.x = 0; e.model.rotation.z = 0; e.model.position.y = 0 }
+    }
+    audio.page()
+    this.close()
   }
 
   setTab(tab) {

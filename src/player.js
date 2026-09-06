@@ -33,7 +33,8 @@ function uiBlocking() {
     !$("title").classList.contains("hidden") ||
     !$("todo").classList.contains("hidden") ||
     !$("deed").classList.contains("hidden") ||
-    !$("ai").classList.contains("hidden")
+    !$("ai").classList.contains("hidden") ||
+    !$("ai-instr").classList.contains("hidden")
 }
 
 function buildHorse() {
@@ -593,19 +594,6 @@ function buildKnight() {
 }
 
 
-function buildArcTrail() {
-  const geo = new THREE.RingGeometry(1.1, 2.5, 24, 1, 0, 2.1)
-  geo.rotateX(-Math.PI / 2)
-  const mat = new THREE.MeshBasicMaterial({
-    color: "#fff3d0", transparent: true, opacity: 0, side: THREE.DoubleSide,
-    blending: THREE.AdditiveBlending, depthWrite: false
-  })
-  const m = new THREE.Mesh(geo, mat)
-  m.visible = false
-  m.frustumCulled = false
-  return m
-}
-
 export class Player {
   constructor(scene, camera, fx) {
     this.camera = camera
@@ -615,8 +603,6 @@ export class Player {
     this.horse = buildHorse()
     this.group.add(this.knight)
     this.group.add(this.horse)
-    this.arc = buildArcTrail()
-    this.group.add(this.arc)
     this.group.position.set(0, 0, 18)
     scene.add(this.group)
 
@@ -663,7 +649,10 @@ export class Player {
     window.addEventListener("keyup", (e) => { this.keys[e.code] = false })
     const canvas = document.getElementById("game")
     canvas.addEventListener("mousedown", (e) => {
-      if (e.button === 2) { this.blockHeld = true; return }
+      if (e.button === 2) {
+        window.dispatchEvent(new CustomEvent("open-todo"))
+        return
+      }
       if (e.button !== 0) return
       this.mouse.down = true
       this.mouse.lx = e.clientX
@@ -672,7 +661,6 @@ export class Player {
       if (!isTyping() && !uiBlocking()) this.tryAttack()
     })
     window.addEventListener("mouseup", (e) => {
-      if (e.button === 2) this.blockHeld = false
       if (e.button === 0) this.mouse.down = false
     })
     window.addEventListener("mousemove", (e) => {
@@ -813,7 +801,8 @@ export class Player {
     const todoOpen = !document.getElementById("todo").classList.contains("hidden")
     const deedOpen = !document.getElementById("deed").classList.contains("hidden")
     const aiOpen = !document.getElementById("ai").classList.contains("hidden")
-    const anyUI = battleOpen || planOpen || winOpen || todoOpen || deedOpen || aiOpen || !document.getElementById("title").classList.contains("hidden")
+    const instrOpen = !document.getElementById("ai-instr").classList.contains("hidden")
+    const anyUI = battleOpen || planOpen || winOpen || todoOpen || deedOpen || aiOpen || instrOpen || !document.getElementById("title").classList.contains("hidden")
 
     let mx = 0, mz = 0
     if (!anyUI && this.execT < 0) {
@@ -825,15 +814,11 @@ export class Player {
     const sprintHeld = this.keys.ShiftLeft || this.keys.ShiftRight
     let speed = (this.mounted ? 26 : 11) * 1
     const moving = (mx !== 0 || mz !== 0) && this.rollT < 0
-    const sprint = sprintHeld && moving && !this.exhausted && this.rollT < 0
+    const sprint = sprintHeld && moving && this.rollT < 0
     if (sprint) speed *= this.mounted ? 1.7 : 2
-    if (sprint) {
-      this.stamina -= dt * (this.mounted ? 0.22 : 0.3)
-      if (this.stamina <= 0) { this.stamina = 0; this.exhausted = true }
-    } else {
-      this.stamina = Math.min(1, this.stamina + dt * 0.18)
-      if (this.exhausted && this.stamina >= 0.35) this.exhausted = false
-    }
+    // Sprint no longer drains stamina, so it never slows down.
+    this.stamina = Math.min(1, this.stamina + dt * 0.18)
+    this.exhausted = false
     if (!this.staminaEl) {
       this.staminaEl = document.getElementById("hud-stamina")
       this.staminaFillEl = document.getElementById("hud-stamina-fill")
@@ -906,14 +891,8 @@ export class Player {
     if (this.mounted && moving) this.group.position.y += Math.abs(Math.sin(this.walkT)) * 0.18
     this.group.rotation.y = this.yaw
 
-    const wasBlocking = this.blocking
-    this.blocking = this.blockHeld && this.attackT < 0 && this.execT < 0 && this.victoryT < 0 && this.rollT < 0 && !anyUI
-    if (this.blocking) {
-      if (!wasBlocking) this.blockT = 0
-      this.blockT += dt
-    } else {
-      this.blockT = 99
-    }
+    this.blocking = false
+    this.blockT = 99
 
     const p = this.knight.userData.parts
     const w = Math.sin(this.walkT)
@@ -921,15 +900,9 @@ export class Player {
     this.knight.scale.y = this.rollT >= 0 ? 1 : (moving ? 1 : 1 + Math.sin(this.idleT * 2.2) * 0.008)
     p.legL.rotation.x = this.rollT >= 0 ? 0.5 : (moving ? w * 0.7 : 0)
     p.legR.rotation.x = this.rollT >= 0 ? -0.5 : (moving ? -w * 0.7 : 0)
-    if (this.blocking) {
-      p.armL.rotation.x = -1.25
-      p.armL.rotation.y = 0.3
-      p.armL.rotation.z = 0.55
-    } else {
-      p.armL.rotation.y = 0
-      p.armL.rotation.z = 0
-      p.armL.rotation.x = moving ? -w * 0.5 : 0
-    }
+    p.armL.rotation.y = 0
+    p.armL.rotation.z = 0
+    p.armL.rotation.x = moving ? -w * 0.5 : 0
 
     if (this.attackT >= 0) {
       this.attackT += dt
@@ -1001,27 +974,6 @@ export class Player {
     }
     cp.needsUpdate = true
     capeGeo.computeVertexNormals()
-
-    if (this.arc) {
-      if (this.attackT >= 0) {
-        const t = this.attackT / this.swingDur
-        const vis = t > 0.12 && t < 0.78
-        this.arc.visible = vis
-        if (vis) {
-          const y = this.mounted ? 1.15 : 0
-          this.arc.position.set(0, y + 2.05, 0)
-          this.arc.rotation.y = this.comboIdx === 1 ? Math.PI - 0.35 : -0.35
-          const k = (t - 0.12) / 0.66
-          const sc = (this.mounted ? 1.35 : 1) * (0.75 + 0.35 * k)
-          this.arc.scale.set(this.comboIdx === 1 ? -sc : sc, 1, sc)
-          this.arc.rotation.z = 0.35 * Math.sin(k * Math.PI)
-          this.arc.material.opacity = 0.5 * Math.sin(k * Math.PI)
-          this.arc.material.color.setHex(this.comboIdx === 2 ? 0xffd98a : 0xfff3d0)
-        }
-      } else if (this.arc.visible) {
-        this.arc.visible = false
-      }
-    }
 
     if (this.mounted) {
       this.horse.userData.legs.forEach((leg, i) => {

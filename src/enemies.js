@@ -1085,6 +1085,8 @@ export class EnemyManager {
 
   updateBar(e, d) {
     const bar = e.bar
+    // Boss (Bull Market) has no floating bar over its head — reads cleaner.
+    if (!e.battle) { bar.group.visible = false; return }
     if (e.hp >= e.maxHp && d > 15) { bar.group.visible = false; return }
     bar.group.visible = true
     const ratio = Math.max(0, e.hp / e.maxHp)
