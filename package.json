@@ -7,7 +7,10 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "bridge": "node bridge.mjs"
+    "bridge": "node bridge.mjs",
+    "fetch-assets": "node scripts/fetch-assets.mjs",
+    "optimize-assets": "node scripts/optimize-assets.mjs",
+    "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
     "three": "^0.169.0"

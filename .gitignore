@@ -5,3 +5,5 @@ dist
 smoke*.png
 .DS_Store
 .env
+public/assets/raw/
+public/assets/*.zip

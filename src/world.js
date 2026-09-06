@@ -3,6 +3,35 @@ import * as THREE from "three"
 export const SIZE = 400
 const HALF = SIZE / 2
 
+// ---- GLTF asset integration (null-safe: every branch falls back to procedural) ----
+let ASSETS = null
+const fitCache = {}
+/** Cached bbox of a loaded model: {minY, sx, sy, sz} or null when missing. */
+function gltfFit(name) {
+  if (fitCache[name] !== undefined) return fitCache[name]
+  const g = ASSETS && ASSETS.gltf(name)
+  if (!g) return (fitCache[name] = null)
+  const bb = new THREE.Box3().setFromObject(g.scene)
+  const sz = bb.getSize(new THREE.Vector3())
+  return (fitCache[name] = { minY: bb.min.y, sx: sz.x || 1, sy: sz.y || 1, sz: sz.z || 1 })
+}
+/** Plant GLTF tree clones at spots; returns false when model missing (caller uses procedural). */
+function plantTrees(parent, spots, name, targetH, sMin = 0.9, sMax = 1.4) {
+  const proto = ASSETS && ASSETS.model(name)
+  if (!proto) return false
+  const f = gltfFit(name)
+  for (const p of spots) {
+    const t = proto.clone()
+    const s = (targetH / (f ? f.sy : targetH)) * (sMin + Math.random() * (sMax - sMin))
+    t.scale.setScalar(s)
+    t.position.set(p.x, p.y - (f ? f.minY * s : 0), p.z)
+    t.rotation.y = Math.random() * Math.PI * 2
+    t.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true } })
+    parent.add(t)
+  }
+  return true
+}
+
 const DIRS = {
   woods: new THREE.Vector2(-1, 0.32).normalize(),
   plains: new THREE.Vector2(1, -0.28).normalize(),
@@ -246,8 +275,138 @@ function groundMat() {
   return new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.96, metalness: 0, map: tex })
 }
 
+// ---- terrain splat material (PBR layers from assets; per-vertex weights aw0/aw1) ----
+let neutralCTex = null, neutralNTex = null
+function makeNeutralTex(isNormal) {
+  const d = isNormal ? new Uint8Array([128, 128, 255, 255]) : new Uint8Array([128, 128, 128, 255])
+  const t = new THREE.DataTexture(d, 1, 1)
+  t.needsUpdate = true
+  return t
+}
+const SPLAT_TILES = { grass: 0.55, forest: 0.5, dry: 0.45, rock: 0.35, snow: 0.5, path: 0.4 }
+function splatGroundMat() {
+  const L = ASSETS.terrain || {}
+  const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 })
+  if (!neutralCTex) { neutralCTex = makeNeutralTex(false); neutralNTex = makeNeutralTex(true) }
+  const uni = {}
+  for (const k of Object.keys(SPLAT_TILES)) {
+    const l = L[k] || {}
+    uni["uC" + k] = { value: l.color || neutralCTex }
+    uni["uN" + k] = { value: l.normal || neutralNTex }
+  }
+  m.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, uni)
+    sh.vertexShader = `
+      attribute vec4 aw0; attribute vec4 aw1;
+      varying vec4 vW0; varying vec4 vW1; varying vec3 vWPos; varying vec3 vWN;
+    ` + sh.vertexShader
+      .replace("#include <begin_vertex>", `#include <begin_vertex>
+        vW0 = aw0; vW1 = aw1;
+        vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;`)
+      .replace("#include <beginnormal_vertex>", `#include <beginnormal_vertex>
+        vWN = normalize(mat3(modelMatrix) * objectNormal);`)
+    sh.fragmentShader = `
+      uniform sampler2D uCgrass; uniform sampler2D uCforest; uniform sampler2D uCdry;
+      uniform sampler2D uCrock; uniform sampler2D uCsnow; uniform sampler2D uCpath;
+      uniform sampler2D uNgrass; uniform sampler2D uNforest; uniform sampler2D uNdry;
+      uniform sampler2D uNrock; uniform sampler2D uNsnow; uniform sampler2D uNpath;
+      varying vec4 vW0; varying vec4 vW1; varying vec3 vWPos; varying vec3 vWN;
+    ` + sh.fragmentShader
+      .replace("#include <color_fragment>", `
+        vec3 splatC = texture2D(uCgrass, vWPos.xz * 0.55).rgb * vW0.x;
+        splatC += texture2D(uCforest, vWPos.xz * 0.5).rgb * vW0.y;
+        splatC += texture2D(uCdry, vWPos.xz * 0.45).rgb * vW0.z;
+        splatC += texture2D(uCrock, vWPos.xz * 0.35).rgb * vW0.w;
+        splatC += texture2D(uCsnow, vWPos.xz * 0.5).rgb * vW1.x;
+        splatC += texture2D(uCpath, vWPos.xz * 0.4).rgb * vW1.y;
+        diffuseColor.rgb *= splatC * mix(vec3(1.0), vColor * 1.9, 0.55);`)
+      .replace("#include <normal_fragment_maps>", `
+        vec3 splatN = texture2D(uNgrass, vWPos.xz * 0.55).xyz * vW0.x;
+        splatN += texture2D(uNforest, vWPos.xz * 0.5).xyz * vW0.y;
+        splatN += texture2D(uNdry, vWPos.xz * 0.45).xyz * vW0.z;
+        splatN += texture2D(uNrock, vWPos.xz * 0.35).xyz * vW0.w;
+        splatN += texture2D(uNsnow, vWPos.xz * 0.5).xyz * vW1.x;
+        splatN += texture2D(uNpath, vWPos.xz * 0.4).xyz * vW1.y;
+        vec3 snN = splatN * 2.0 - 1.0;
+        vec3 wNn = normalize(vWN);
+        vec3 wTn = normalize(cross(vec3(0.0, 0.0, 1.0), wNn) + vec3(0.001, 0.0, 0.0));
+        vec3 wBn = cross(wNn, wTn);
+        normal = normalize(wTn * snN.x + wBn * snN.y + wNn * max(snN.z, 0.25));`)
+  }
+  return m
+}
+
+// ---- water: shared upgraded material (scrolling procedural noise normals + vertex ripple) ----
+let waveTexA = null, waveTexB = null
+function waveNormalTex(seed) {
+  const N = 256
+  const cv = document.createElement("canvas")
+  cv.width = cv.height = N
+  const x = cv.getContext("2d")
+  const img = x.createImageData(N, N)
+  const rnd = new Float32Array(N * N)
+  let s = seed
+  const rand = () => { s = (s * 16807) % 2147483647; return (s - 1) / 2147483646 }
+  for (let i = 0; i < rnd.length; i++) rnd[i] = rand()
+  const val = (lx, ly) => {
+    const xi = Math.floor(lx) & 255, yi = Math.floor(ly) & 255
+    const xf = lx - Math.floor(lx), yf = ly - Math.floor(ly)
+    const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf)
+    const x1 = (xi + 1) & 255, y1 = (yi + 1) & 255
+    const a = rnd[yi * N + xi], b = rnd[yi * N + x1], c = rnd[y1 * N + xi], d = rnd[y1 * N + x1]
+    return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v
+  }
+  const H = new Float32Array(N * N)
+  for (let yy = 0; yy < N; yy++) {
+    for (let xx = 0; xx < N; xx++) {
+      H[yy * N + xx] = val(xx / 32, yy / 32) * 0.55 + val(xx / 16, yy / 16) * 0.3 + val(xx / 8, yy / 8) * 0.15
+    }
+  }
+  for (let yy = 0; yy < N; yy++) {
+    for (let xx = 0; xx < N; xx++) {
+      const hl = H[yy * N + ((xx - 1 + N) % N)], hr = H[yy * N + ((xx + 1) % N)]
+      const hd = H[((yy - 1 + N) % N) * N + xx], hu = H[((yy + 1) % N) * N + xx]
+      const nx = (hl - hr) * 2.2, nz = (hd - hu) * 2.2
+      const i = (yy * N + xx) * 4
+      img.data[i] = Math.round((nx * 0.5 + 0.5) * 255)
+      img.data[i + 1] = Math.round((nz * 0.5 + 0.5) * 255)
+      img.data[i + 2] = 255
+      img.data[i + 3] = 255
+    }
+  }
+  x.putImageData(img, 0, 0)
+  const t = new THREE.CanvasTexture(cv)
+  t.wrapS = t.wrapT = THREE.RepeatWrapping
+  return t
+}
 function waterMat(color) {
-  return new THREE.MeshStandardMaterial({ color, transparent: true, opacity: 0.86, roughness: 0.12, metalness: 0.25 })
+  if (!waveTexA) { waveTexA = waveNormalTex(1234567); waveTexB = waveNormalTex(7654321) }
+  const m = new THREE.MeshStandardMaterial({
+    color: "#3f7d9c", transparent: true, opacity: 0.9, roughness: 0.08, metalness: 0.15, envMapIntensity: 1.4
+  })
+  m.onBeforeCompile = (sh) => {
+    sh.uniforms.uTime = { value: 0 }
+    sh.uniforms.uWaveA = { value: waveTexA }
+    sh.uniforms.uWaveB = { value: waveTexB }
+    sh.vertexShader = "uniform float uTime;\nvarying vec2 vWUv; varying vec3 vWNw;\n" + sh.vertexShader
+      .replace("#include <begin_vertex>", `#include <begin_vertex>
+        transformed.y += (sin(transformed.x * 0.85 + uTime * 1.8) + cos(transformed.z * 1.05 + uTime * 1.35)) * 0.022;
+        vWUv = (modelMatrix * vec4(transformed, 1.0)).xz;
+        vWNw = normalize(mat3(modelMatrix) * objectNormal);`)
+    sh.fragmentShader = "uniform float uTime; uniform sampler2D uWaveA; uniform sampler2D uWaveB;\nvarying vec2 vWUv; varying vec3 vWNw;\n" + sh.fragmentShader
+      .replace("#include <normal_fragment_maps>", `
+        vec2 wUvA = vWUv * 0.24 + vec2(uTime * 0.031, uTime * 0.022);
+        vec2 wUvB = vWUv * 0.15 - vec2(uTime * 0.018, uTime * 0.027);
+        vec3 wNa = texture2D(uWaveA, wUvA).xyz * 2.0 - 1.0;
+        vec3 wNb = texture2D(uWaveB, wUvB).xyz * 2.0 - 1.0;
+        vec3 wNs = normalize(wNa + wNb);
+        vec3 wNw = normalize(vWNw);
+        vec3 wTw = normalize(cross(vec3(0.0, 0.0, 1.0), wNw) + vec3(0.001, 0.0, 0.0));
+        vec3 wBw = cross(wNw, wTw);
+        normal = normalize(wTw * wNs.x + wBw * wNs.y + wNw * max(wNs.z, 0.4));`)
+    windMats.push(sh.uniforms.uTime)
+  }
+  return m
 }
 
 const texCache = {}
@@ -328,7 +487,11 @@ const D_timber = (x, s) => {
   }
 }
 
-export function buildWorld(scene) {
+export function buildWorld(scene, A = null) {
+  ASSETS = A || null
+  for (const k of Object.keys(fitCache)) delete fitCache[k]
+  grassPts.length = 0
+  grassChunks.length = 0
   windMats = []
   const g = new THREE.Group()
   scene.add(g)
@@ -345,6 +508,7 @@ export function buildWorld(scene) {
   buildCoins(g)
   buildAmbient(g)
   buildSiteMarkers(g)
+  finishGrass(g)
 
   return { anims }
 }
@@ -355,6 +519,8 @@ function buildTerrain(parent) {
   geo.rotateX(-Math.PI / 2)
   const pos = geo.attributes.position
   const colors = new Float32Array(pos.count * 3)
+  const aw0 = new Float32Array(pos.count * 4)
+  const aw1 = new Float32Array(pos.count * 4)
   const cGrass = new THREE.Color("#7ba85c")
   const cWoods = new THREE.Color("#4e8a52")
   const cPlains = new THREE.Color("#c2ad62")
@@ -391,8 +557,8 @@ function buildTerrain(parent) {
     const pdist = Math.sqrt(pd)
     if (pdist < 10.5) {
       const edgeT = Math.min(0.7, Math.max(0, (10.5 - pdist) / 3.6) * 0.75)
-      c.lerp(cPathEdge, edgeT)
       const coreT = Math.min(0.9, Math.max(0, (6 - pdist) / 4.6) * 0.95)
+      c.lerp(cPathEdge, edgeT)
       c.lerp(cPathCore, coreT)
     }
     for (const wf of [FLATS[10], FLATS[11]]) {
@@ -403,18 +569,38 @@ function buildTerrain(parent) {
         c.offsetHSL(0, 0.03 * damp, -0.05 * damp)
       }
     }
+    let snowT = 0
     if (h > 9.5) {
       const patch = Math.sin(x * 0.55 + Math.cos(z * 0.43) * 2.2) * Math.cos(z * 0.61 + Math.sin(x * 0.37) * 1.9) + Math.sin(x * 0.19) * Math.cos(z * 0.23) * 0.7
-      const snowT = Math.min(1, Math.max(0, (h - 9.5) / 5.2 + patch * 0.22))
+      snowT = Math.min(1, Math.max(0, (h - 9.5) / 5.2 + patch * 0.22))
       c.lerp(cSnow, snowT)
     }
     const mot = Math.sin(x * 0.11 + 3.1) * Math.cos(z * 0.13 + 1.7) + Math.sin(x * 0.31) * Math.cos(z * 0.27) * 0.5
     c.offsetHSL(0.008 * mot, 0.05 * mot, 0.045 * mot)
     colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b
+    // splat weights (mirror of the tint logic above; normalized to sum 1)
+    let edgeT2 = 0, coreT2 = 0
+    if (pdist < 10.5) {
+      edgeT2 = Math.min(0.7, Math.max(0, (10.5 - pdist) / 3.6) * 0.75)
+      coreT2 = Math.min(0.9, Math.max(0, (6 - pdist) / 4.6) * 0.95)
+    }
+    let wForest = Math.min(1, wWoods) * 0.9 + lushT * 0.6 + Math.min(1, wHigh) * 0.3
+    let wDry = Math.min(1, wPlains * 0.9) * 0.85
+    if (dist < 62) wDry += (1 - dist / 62) * 0.8
+    let wRock = rockT * 0.85 + Math.min(1, wHigh) * 0.35
+    const wSnow = snowT
+    const wPath = Math.max(edgeT2, coreT2)
+    let wGrass = 1 - (wForest + wDry + wRock + wSnow + wPath)
+    if (wGrass < 0.02) wGrass = 0.02
+    const wSum = wGrass + wForest + wDry + wRock + wSnow + wPath
+    aw0[i * 4] = wGrass / wSum; aw0[i * 4 + 1] = wForest / wSum; aw0[i * 4 + 2] = wDry / wSum; aw0[i * 4 + 3] = wRock / wSum
+    aw1[i * 4] = wSnow / wSum; aw1[i * 4 + 1] = wPath / wSum
   }
   geo.setAttribute("color", new THREE.BufferAttribute(colors, 3))
+  geo.setAttribute("aw0", new THREE.BufferAttribute(aw0, 4))
+  geo.setAttribute("aw1", new THREE.BufferAttribute(aw1, 4))
   geo.computeVertexNormals()
-  const mesh = new THREE.Mesh(geo, groundMat())
+  const mesh = new THREE.Mesh(geo, ASSETS && ASSETS.terrain ? splatGroundMat() : groundMat())
   mesh.receiveShadow = true
   parent.add(mesh)
 
@@ -427,81 +613,92 @@ function buildTerrain(parent) {
 }
 
 function buildSky(scene) {
-  const geo = new THREE.SphereGeometry(560, 24, 16)
-  const mat = new THREE.ShaderMaterial({
-    side: THREE.BackSide,
-    uniforms: { top: { value: new THREE.Color("#7fa7d9") }, mid: { value: new THREE.Color("#f2c9a0") }, bot: { value: new THREE.Color("#f7dcb0") } },
-    vertexShader: `varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
-    fragmentShader: `varying vec3 vP; uniform vec3 top; uniform vec3 mid; uniform vec3 bot;
-      void main(){ vec3 n = normalize(vP); float h = n.y;
-        vec3 c = h > 0.18 ? mix(mid, top, smoothstep(0.18, 0.75, h)) : mix(bot, mid, smoothstep(-0.1, 0.18, h));
-        float haze = 1.0 - smoothstep(0.0, 0.3, abs(h + 0.02));
-        c = mix(c, vec3(0.96, 0.88, 0.72), haze * 0.5);
-        float sg = pow(max(dot(n, normalize(vec3(-0.55, 0.33, 0.72))), 0.0), 24.0);
-        c += sg * vec3(0.55, 0.42, 0.22);
-        float warm = pow(max(dot(n, normalize(vec3(-0.55, 0.33, 0.72))), 0.0), 3.0);
-        c += warm * vec3(0.1, 0.055, 0.02) * (0.35 + 0.65 * (1.0 - smoothstep(0.0, 0.45, h)));
-        gl_FragColor = vec4(c, 1.0); }`
-  })
-  scene.add(new THREE.Mesh(geo, mat))
+  const useShaderSky = !!scene.userData.useSkyShader
+  if (!useShaderSky) {
+    const geo = new THREE.SphereGeometry(560, 24, 16)
+    const mat = new THREE.ShaderMaterial({
+      side: THREE.BackSide,
+      uniforms: { top: { value: new THREE.Color("#7fa7d9") }, mid: { value: new THREE.Color("#f2c9a0") }, bot: { value: new THREE.Color("#f7dcb0") } },
+      vertexShader: `varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+      fragmentShader: `varying vec3 vP; uniform vec3 top; uniform vec3 mid; uniform vec3 bot;
+        void main(){ vec3 n = normalize(vP); float h = n.y;
+          vec3 c = h > 0.18 ? mix(mid, top, smoothstep(0.18, 0.75, h)) : mix(bot, mid, smoothstep(-0.1, 0.18, h));
+          float haze = 1.0 - smoothstep(0.0, 0.3, abs(h + 0.02));
+          c = mix(c, vec3(0.96, 0.88, 0.72), haze * 0.5);
+          float sg = pow(max(dot(n, normalize(vec3(-0.55, 0.33, 0.72))), 0.0), 24.0);
+          c += sg * vec3(0.55, 0.42, 0.22);
+          float warm = pow(max(dot(n, normalize(vec3(-0.55, 0.33, 0.72))), 0.0), 3.0);
+          c += warm * vec3(0.1, 0.055, 0.02) * (0.35 + 0.65 * (1.0 - smoothstep(0.0, 0.45, h)));
+          gl_FragColor = vec4(c, 1.0); }`
+    })
+    scene.add(new THREE.Mesh(geo, mat))
 
-  const sun = new THREE.Mesh(
-    new THREE.SphereGeometry(26, 16, 16),
-    new THREE.MeshBasicMaterial({ color: "#fff3cf" })
-  )
-  sun.position.set(-200, 190, 262)
-  scene.add(sun)
+    const sun = new THREE.Mesh(
+      new THREE.SphereGeometry(26, 16, 16),
+      new THREE.MeshBasicMaterial({ color: "#fff3cf" })
+    )
+    sun.position.set(-200, 190, 262)
+    scene.add(sun)
 
-  const glowCv = document.createElement("canvas")
-  glowCv.width = 128; glowCv.height = 128
-  const gctx = glowCv.getContext("2d")
-  const grad = gctx.createRadialGradient(64, 64, 4, 64, 64, 64)
-  grad.addColorStop(0, "rgba(255,244,214,0.9)")
-  grad.addColorStop(0.35, "rgba(255,220,150,0.38)")
-  grad.addColorStop(1, "rgba(255,210,140,0)")
-  gctx.fillStyle = grad
-  gctx.fillRect(0, 0, 128, 128)
-  const glowTex = new THREE.CanvasTexture(glowCv)
-  glowTex.colorSpace = THREE.SRGBColorSpace
-  const glow = new THREE.Sprite(new THREE.SpriteMaterial({
-    map: glowTex, color: "#ffedb8", transparent: true, opacity: 0.9,
-    blending: THREE.AdditiveBlending, depthWrite: false, fog: false
-  }))
-  glow.scale.set(240, 240, 1)
-  glow.position.copy(sun.position)
-  scene.add(glow)
+    const glowCv = document.createElement("canvas")
+    glowCv.width = 128; glowCv.height = 128
+    const gctx = glowCv.getContext("2d")
+    const grad = gctx.createRadialGradient(64, 64, 4, 64, 64, 64)
+    grad.addColorStop(0, "rgba(255,244,214,0.9)")
+    grad.addColorStop(0.35, "rgba(255,220,150,0.38)")
+    grad.addColorStop(1, "rgba(255,210,140,0)")
+    gctx.fillStyle = grad
+    gctx.fillRect(0, 0, 128, 128)
+    const glowTex = new THREE.CanvasTexture(glowCv)
+    glowTex.colorSpace = THREE.SRGBColorSpace
+    const glow = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: glowTex, color: "#ffedb8", transparent: true, opacity: 0.9,
+      blending: THREE.AdditiveBlending, depthWrite: false, fog: false
+    }))
+    glow.scale.set(240, 240, 1)
+    glow.position.copy(sun.position)
+    scene.add(glow)
 
-  const halo2 = new THREE.Sprite(new THREE.SpriteMaterial({
-    map: glowTex, color: "#ffd9a0", transparent: true, opacity: 0.34,
-    blending: THREE.AdditiveBlending, depthWrite: false, fog: false
-  }))
-  halo2.scale.set(520, 520, 1)
-  halo2.position.copy(sun.position)
-  scene.add(halo2)
+    const halo2 = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: glowTex, color: "#ffd9a0", transparent: true, opacity: 0.34,
+      blending: THREE.AdditiveBlending, depthWrite: false, fog: false
+    }))
+    halo2.scale.set(520, 520, 1)
+    halo2.position.copy(sun.position)
+    scene.add(halo2)
 
-  const halo3 = new THREE.Sprite(new THREE.SpriteMaterial({
-    map: glowTex, color: "#ffcf90", transparent: true, opacity: 0.16,
-    blending: THREE.AdditiveBlending, depthWrite: false, fog: false
-  }))
-  halo3.scale.set(900, 900, 1)
-  halo3.position.copy(sun.position)
-  scene.add(halo3)
+    const halo3 = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: glowTex, color: "#ffcf90", transparent: true, opacity: 0.16,
+      blending: THREE.AdditiveBlending, depthWrite: false, fog: false
+    }))
+    halo3.scale.set(900, 900, 1)
+    halo3.position.copy(sun.position)
+    scene.add(halo3)
+  }
 
-  for (let i = 0; i < 16; i++) {
-    const cl = new THREE.Group()
-    const cloudMat = new THREE.MeshLambertMaterial({ color: "#fff8ec", emissive: "#eadbc4", emissiveIntensity: 0.25, transparent: true, opacity: 0.96 - Math.random() * 0.08 })
-    const n = 7 + Math.floor(Math.random() * 5)
-    for (let j = 0; j < n; j++) {
-      const s = 9 + Math.random() * 15
-      const m = new THREE.Mesh(new THREE.SphereGeometry(s, 8, 6), cloudMat)
-      m.position.set(j * s * 0.85 - n * s * 0.38, Math.random() * 4.5, (Math.random() - 0.5) * 10)
-      m.scale.y = 0.4
-      cl.add(m)
-    }
-    cl.position.set((Math.random() - 0.5) * 560, 95 + Math.random() * 60, (Math.random() - 0.5) * 560)
-    cl.userData.spd = 1.5 + Math.random() * 2
-    anims.clouds.push(cl)
-    scene.add(cl)
+  // Billboard clouds: soft radial-gradient sprites (kept even when Sky shader is active)
+  const clCv = document.createElement("canvas")
+  clCv.width = 128; clCv.height = 128
+  const clx = clCv.getContext("2d")
+  const clGrad = clx.createRadialGradient(64, 64, 6, 64, 64, 62)
+  clGrad.addColorStop(0, "rgba(255,250,240,0.95)")
+  clGrad.addColorStop(0.55, "rgba(250,242,228,0.5)")
+  clGrad.addColorStop(1, "rgba(248,238,220,0)")
+  clx.fillStyle = clGrad
+  clx.fillRect(0, 0, 128, 128)
+  const clTex = new THREE.CanvasTexture(clCv)
+  clTex.colorSpace = THREE.SRGBColorSpace
+  for (let i = 0; i < 20; i++) {
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: clTex, color: "#fff8ec", transparent: true, opacity: 0.4 + Math.random() * 0.22,
+      depthWrite: false, fog: false
+    }))
+    const cs = 60 + Math.random() * 95
+    sp.scale.set(cs, cs * (0.4 + Math.random() * 0.22), 1)
+    sp.position.set((Math.random() - 0.5) * 640, 100 + Math.random() * 85, (Math.random() - 0.5) * 640)
+    sp.userData.spd = 1.5 + Math.random() * 2
+    anims.clouds.push(sp)
+    scene.add(sp)
   }
 }
 
@@ -653,20 +850,42 @@ function lantern(parent, x, z) {
   let y = heightAt(x, z)
   if (!Number.isFinite(y)) y = 0
   const gr = new THREE.Group()
-  const post = cyl(0.09, 0.13, 3.2, "#4a3826")
-  post.position.y = 1.6
-  gr.add(post)
-  const arm = box(0.7, 0.1, 0.1, "#4a3826")
-  arm.position.set(0.3, 3.2, 0)
-  gr.add(arm)
-  const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.22, 8, 8), new THREE.MeshLambertMaterial({ color: "#ffd98a", emissive: "#ffb84d", emissiveIntensity: 1.2 }))
-  bulb.position.set(0.58, 3.02, 0)
+  const lm = ASSETS && ASSETS.model("lantern")
+  let lightX = 0, lightY = 3.02
+  if (lm) {
+    const f = gltfFit("lantern")
+    const s = f ? 3.2 / f.sy : 1
+    lm.scale.setScalar(s)
+    lm.position.y = f ? -f.minY * s : 0
+    gr.add(lm)
+    lightY = f ? f.sy * s * 0.82 : 2.9
+  } else {
+    const post = cyl(0.09, 0.13, 3.2, "#4a3826")
+    post.position.y = 1.6
+    gr.add(post)
+    const arm = box(0.7, 0.1, 0.1, "#4a3826")
+    arm.position.set(0.3, 3.2, 0)
+    gr.add(arm)
+    lightX = 0.58
+  }
+  const bulbMat = new THREE.MeshStandardMaterial({ color: "#ffd98a", emissive: "#ffb84d", emissiveIntensity: 1.2, roughness: 0.4, side: THREE.DoubleSide })
+  const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.2, 8, 8), bulbMat)
+  bulb.position.set(lightX, lightY, 0)
   gr.add(bulb)
+  if (!lm) {
+    for (let pi = 0; pi < 4; pi++) {
+      const a = (pi / 4) * Math.PI * 2 + 0.4
+      const pane = new THREE.Mesh(new THREE.PlaneGeometry(0.24, 0.32), bulbMat)
+      pane.position.set(lightX + Math.cos(a) * 0.19, lightY, Math.sin(a) * 0.19)
+      pane.rotation.y = Math.PI / 2 - a
+      gr.add(pane)
+    }
+  }
   const glow = new THREE.PointLight("#ffb35c", 0.5, 14, 2)
   glow.position.copy(bulb.position)
   gr.add(glow)
   anims.lanterns = anims.lanterns || []
-  anims.lanterns.push({ light: glow, bulb: bulb.material, ph: Math.random() * Math.PI * 2 })
+  anims.lanterns.push({ light: glow, bulb: bulbMat, ph: Math.random() * Math.PI * 2 })
   gr.position.set(x, y, z)
   parent.add(gr)
 }
@@ -681,6 +900,31 @@ function buildVillage(parent) {
   v.add(plaza)
 
   const keep = new THREE.Group()
+  const keepM = ASSETS && ASSETS.model("keep")
+  if (keepM) {
+    const f = gltfFit("keep")
+    const s = f ? Math.min(24 / f.sx, 13.5 / f.sz) : 1
+    keepM.scale.setScalar(s)
+    keepM.position.y = f ? -f.minY * s : 0
+    keep.add(keepM)
+    // boss gate stays procedural so anims.gateDoors (20/20 mechanic) is preserved
+    const frontZ = f ? (f.sz * s) / 2 + 0.15 : 6.3
+    const doorFrame = boxTex(6, 6.5, 1, "#6e685c", "stone", D_stone)
+    doorFrame.position.set(0, 3.25, frontZ)
+    keep.add(doorFrame)
+    const doorL = boxTex(1.9, 5.6, 0.4, "#4a3626", "timber", D_timber)
+    doorL.position.set(-0.95, 2.8, frontZ)
+    keep.add(doorL)
+    const doorR = doorL.clone()
+    doorR.position.x = 0.95
+    keep.add(doorR)
+    anims.gateDoors = [doorL, doorR]
+    for (const px of [-1, 0, 1]) {
+      const port = box(0.09, 5.4, 0.09, "#3f3122")
+      port.position.set(px * 1.5, 2.9, frontZ - 0.35)
+      keep.add(port)
+    }
+  } else {
   const base = boxTex(20, 9, 12, "#e8e0cd", "stone", D_stone)
   base.position.y = 4.5
   keep.add(base)

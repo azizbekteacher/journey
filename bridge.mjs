@@ -28,6 +28,7 @@ const ALLOWED_FILES = new Set([
   "Tasks.md",
   "Extra details.md",
   "About me.md",
+  "Coach instructions.md",
 ])
 
 const CORS = {

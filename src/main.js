@@ -1,8 +1,14 @@
 import * as THREE from "three"
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js"
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js"
+import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js"
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
+import { GTAOPass } from "three/addons/postprocessing/GTAOPass.js"
+import { SMAAPass } from "three/addons/postprocessing/SMAAPass.js"
+import { OutputPass } from "three/addons/postprocessing/OutputPass.js"
+import { Sky } from "three/addons/objects/Sky.js"
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js"
+import { initAssets } from "./assets.js"
 
 import { buildWorld, updateWorld, heightAt, zoneAt, getCoins, SIZE } from "./world.js"
 import { FX } from "./fx.js"
@@ -29,13 +35,13 @@ window.addEventListener("fallback-begin", () => {
 const canvas = $("game")
 let renderer
 try {
-  renderer = new THREE.WebGLRenderer({ canvas, antialias: true })
+  renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" })
 } catch(e) {
   const t=document.getElementById('toasts'); if(t){const d=document.createElement('div'); d.className='toast'; d.style.background='#a63a2e'; d.style.color='#fff'; d.textContent='WebGL error: '+e.message; t.appendChild(d);}
   throw e;
 }
 renderer.setSize(innerWidth, innerHeight)
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2.5))
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5))
 renderer.shadowMap.enabled = true
 renderer.shadowMap.type = THREE.PCFSoftShadowMap
 renderer.toneMapping = THREE.ACESFilmicToneMapping
@@ -43,12 +49,9 @@ renderer.toneMappingExposure = 1.05
 renderer.outputColorSpace = THREE.SRGBColorSpace
 
 const scene = new THREE.Scene()
-scene.fog = new THREE.Fog("#f2d9b8", 90, 430)
-const pmrem = new THREE.PMREMGenerator(renderer)
-scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture
-scene.environmentIntensity = 0.3
+scene.fog = new THREE.Fog("#e8d5b5", 110, 520)
 
-const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 1400)
+const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 3000)
 camera.position.set(0, 8, 30)
 
 const hemi = new THREE.HemisphereLight("#ffe8c8", "#5a6a4a", 0.7)
@@ -57,11 +60,11 @@ const sun = new THREE.DirectionalLight("#ffd9a0", 1.5)
 sun.position.set(-60, 80, 70)
 sun.castShadow = true
 sun.shadow.mapSize.set(4096, 4096)
-sun.shadow.camera.left = -70
-sun.shadow.camera.right = 70
-sun.shadow.camera.top = 70
-sun.shadow.camera.bottom = -70
-sun.shadow.camera.far = 400
+sun.shadow.camera.left = -45
+sun.shadow.camera.right = 45
+sun.shadow.camera.top = 45
+sun.shadow.camera.bottom = -45
+sun.shadow.camera.far = 300
 sun.shadow.bias = -0.0004
 sun.shadow.normalBias = 0.025
 scene.add(sun)
@@ -70,15 +73,101 @@ const sunFill = new THREE.DirectionalLight("#d9c9ff", 0.25)
 sunFill.position.set(80, 40, -60)
 scene.add(sunFill)
 
+let skyObj = null
 const composer = new EffectComposer(renderer)
 composer.addPass(new RenderPass(scene, camera))
-const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.28, 0.7, 0.82)
+const gtao = new GTAOPass(scene, camera, innerWidth, innerHeight, undefined,
+  { radius: 0.5, distanceExponent: 1.5, thickness: 1, scale: 1.2, samples: 12, distanceFallOff: 1, screenSpaceRadius: false },
+  { lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 6, radiusExponent: 1.5, rings: 2, samples: 16 })
+gtao.output = GTAOPass.OUTPUT.Default
+// Sky must not pollute GTAO's normal/depth GBuffer: hide it just for this pass.
+const _gtaoRender = gtao.render.bind(gtao)
+gtao.render = (r, wb, rb, dt, ma) => {
+  if (!skyObj || !skyObj.visible) { _gtaoRender(r, wb, rb, dt, ma); return }
+  skyObj.visible = false
+  try { _gtaoRender(r, wb, rb, dt, ma) } finally { skyObj.visible = true }
+}
+composer.addPass(gtao)
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.32, 0.6, 0.85)
 composer.addPass(bloom)
+const _pr = renderer.getPixelRatio()
+const smaa = new SMAAPass(innerWidth * _pr, innerHeight * _pr)
+composer.addPass(smaa)
+composer.addPass(new OutputPass())
+const GradeShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    uVignette: { value: 0.22 },
+    uSaturation: { value: 1.06 },
+    uLift: { value: new THREE.Vector3(0, 0.005, 0.01) },
+    uGain: { value: new THREE.Vector3(1.03, 1.0, 0.97) }
+  },
+  vertexShader: "varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }",
+  fragmentShader: `
+    uniform sampler2D tDiffuse;
+    uniform float uVignette;
+    uniform float uSaturation;
+    uniform vec3 uLift;
+    uniform vec3 uGain;
+    varying vec2 vUv;
+    void main() {
+      vec4 src = texture2D(tDiffuse, vUv);
+      vec3 col = src.rgb * uGain + uLift;
+      float luma = dot(col, vec3(0.2126, 0.7152, 0.0722));
+      col = mix(vec3(luma), col, uSaturation);
+      float d = distance(vUv, vec2(0.5));
+      col *= 1.0 - uVignette * smoothstep(0.3, 0.78, d);
+      gl_FragColor = vec4(col, src.a);
+    }`
+}
+composer.addPass(new ShaderPass(GradeShader))
 
-const world = buildWorld(scene)
-const fx = new FX(scene)
-const player = new Player(scene, camera, fx)
-const enemyMgr = new EnemyManager(scene, fx, {
+;(async function boot() {
+  const btnBegin = $("btn-begin")
+  try { if (btnBegin) { btnBegin.disabled = true; btnBegin.classList.add("disabled") } } catch (e) {}
+  const loadFill = $("load-fill")
+  const loadPct = $("load-pct")
+  const onProgress = (loaded, total, frac) => {
+    const f = Math.max(0, Math.min(1, Number(frac) || 0))
+    if (loadFill) loadFill.style.width = (f * 100).toFixed(1) + "%"
+    if (loadPct) loadPct.textContent = Math.round(f * 100) + "%"
+  }
+  let lateAssets = null
+  const assetsPromise = initAssets(renderer, onProgress)
+  assetsPromise.then((a) => { lateAssets = a }).catch(() => {})
+  let raced = null
+  try {
+    raced = await Promise.race([assetsPromise, new Promise((res) => setTimeout(() => res(null), 15000))])
+  } catch (e) { raced = null }
+  const A = raced || lateAssets || { env: null, model: () => null, clips: () => null, terrain: null, missing: ["boot-timeout"], report: () => ({ loaded: 0, total: 0, missing: ["boot-timeout"] }) }
+
+  if (A.env) {
+    scene.environment = A.env
+    scene.environmentIntensity = 0.85
+    hemi.intensity = 0.35
+    sun.intensity = 2.2
+    scene.userData.useSkyShader = true
+    skyObj = new Sky()
+    skyObj.scale.setScalar(2000)
+    const su = skyObj.material.uniforms
+    su.turbidity.value = 6
+    su.rayleigh.value = 1.6
+    su.mieCoefficient.value = 0.008
+    su.mieDirectionalG.value = 0.85
+    su.sunPosition.value.set(-60, 80, 70).normalize()
+    scene.add(skyObj)
+  } else {
+    const pmrem = new THREE.PMREMGenerator(renderer)
+    scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture
+    scene.environmentIntensity = 0.3
+    scene.userData.useSkyShader = false
+    pmrem.dispose()
+  }
+
+  const world = buildWorld(scene, A)
+  const fx = new FX(scene)
+  const player = new Player(scene, camera, fx, A)
+  const enemyMgr = new EnemyManager(scene, fx, {
   onPlayerHit(e) {
     if (S.hearts <= 0 || invulnT > 0 || player.rollT >= 0) return
     invulnT = 1.1
@@ -122,11 +211,10 @@ const enemyMgr = new EnemyManager(scene, fx, {
   onKnockdown(e) {
     if (!combat.open) combat.show(e)
   }
-})
+}, A)
 player.enemies = enemyMgr.enemies
 enemyMgr.player = player
 enemyMgr.spawnAll()
-window.__game = { player, enemyMgr, scene, fx }
 
 player.onSwingHit = (e, dmg) => {
   if (enemyMgr.hitByPlayer(e, dmg)) hitStopT = dmg > 1 ? 0.09 : 0.055
@@ -479,6 +567,7 @@ let invulnT = 0
 let regenT = 0
 let lastHearts = S.hearts
 let healT = 0
+const SHADOW_TEXEL = 90 / 4096
 
 function regenTick(dt, uiOpen) {
   const lostHeart = S.hearts < lastHearts
@@ -537,7 +626,7 @@ mmBase.height = 96
 ;(function prerenderMinimap() {
   const c = mmBase.getContext("2d")
   const N = 96, cell = SIZE / N
-  const zc = { village: "#b9a678", woods: "#4e7a4e", plains: "#c2ad62", highlands: "#8f7fb0" }
+  const zc = { village: "#cdb787", woods: "#3f6b42", plains: "#c9a952", highlands: "#7e88a6" }
   for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
     const x = (i + 0.5) * cell - MM_HALF, z = (j + 0.5) * cell - MM_HALF
     c.fillStyle = zc[zoneAt(x, z)] || "#7ba85c"
@@ -617,13 +706,18 @@ function animate() {
   if (hitStopT > 0) { hitStopT -= rawDt; dt = rawDt * 0.06 }
 
   player.update(rawDt)
-  sun.position.set(player.pos.x - 60, player.pos.y + 80, player.pos.z + 70)
-  sun.target.position.copy(player.pos)
+  const p = player.pos
+  sun.position.set(p.x - 48, p.y + 64, p.z + 56)
+  sun.target.position.set(p.x, p.y, p.z)
+  sun.position.x = Math.round(sun.position.x / SHADOW_TEXEL) * SHADOW_TEXEL
+  sun.position.z = Math.round(sun.position.z / SHADOW_TEXEL) * SHADOW_TEXEL
+  sun.target.position.x = Math.round(sun.target.position.x / SHADOW_TEXEL) * SHADOW_TEXEL
+  sun.target.position.z = Math.round(sun.target.position.z / SHADOW_TEXEL) * SHADOW_TEXEL
   sun.target.updateMatrixWorld()
   const uiOpen = combat.open || ai.isOpen() || !$("title").classList.contains("hidden") || !$("plan").classList.contains("hidden") || !$("win").classList.contains("hidden") || !$("todo").classList.contains("hidden") || !$("deed").classList.contains("hidden") || !$("ai-instr").classList.contains("hidden")
   enemyMgr.update(dt, t, player, uiOpen)
   regenTick(rawDt, uiOpen)
-  updateWorld(t, dt, fx)
+  updateWorld(t, dt, fx, player.group.position)
   fx.update(rawDt)
 
   if (enemyMgr.shakeT > 0) {
@@ -721,7 +815,27 @@ window.addEventListener("resize", () => {
   camera.aspect = innerWidth / innerHeight
   camera.updateProjectionMatrix()
   renderer.setSize(innerWidth, innerHeight)
+  const rpr = renderer.getPixelRatio()
   composer.setSize(innerWidth, innerHeight)
+  gtao.setSize(innerWidth * rpr, innerHeight * rpr)
+  bloom.setSize(innerWidth * rpr, innerHeight * rpr)
+  smaa.setSize(innerWidth * rpr, innerHeight * rpr)
 })
 
-animate()
+  animate()
+
+  window.__game = { player, enemyMgr, scene, fx, composer, assets: A }
+  onProgress(1, 1, 1)
+  try { if (btnBegin) { btnBegin.disabled = false; btnBegin.classList.remove("disabled") } } catch (e) {}
+  try { const lb = $("load-bar"); if (lb) setTimeout(() => lb.classList.add("done"), 600) } catch (e) {}
+})().catch((err) => {
+  console.error("[boot] failed:", err)
+  try {
+    const b = document.getElementById("btn-begin")
+    if (b) { b.disabled = false; b.classList.remove("disabled") }
+  } catch (e) {}
+  try {
+    const t = document.getElementById("toasts")
+    if (t) { const d = document.createElement("div"); d.className = "toast"; d.style.background = "#a63a2e"; d.style.color = "#fff"; d.textContent = "Boot error: " + (err?.message || err); t.appendChild(d) }
+  } catch (e) {}
+})

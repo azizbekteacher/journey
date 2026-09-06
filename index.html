@@ -194,7 +194,11 @@
         <span><b>WASD</b> ride</span><span><b>Mouse</b> look</span><span><b>LMB</b> attack</span><span><b>RMB</b> ledger</span>
         <span><b>Shift</b> sprint</span><span><b>C</b> roll</span><span><b>E</b> answer (after knockdown)</span><span><b>H</b> horse (7/20)</span><span><b>Space</b> also attacks</span>
       </div>
-      <button id="btn-begin" class="btn-gold big">Begin the Quest</button>
+      <div id="load-bar" role="status" aria-live="polite">
+        <div class="load-label"><span class="load-text">⚔ Forging the realm…</span><span id="load-pct">0%</span></div>
+        <div class="load-track"><div id="load-fill"></div></div>
+      </div>
+      <button id="btn-begin" class="btn-gold big" disabled>Begin the Quest</button>
     </div>
   </div>
 
@@ -223,6 +227,10 @@
   title.addEventListener('click', function(e){
     if(e.target===title) begin();
   });
+  // safety: never let a dead module keep the quest locked forever
+  setTimeout(function(){
+    if (btn && btn.disabled) { btn.disabled = false; btn.classList.remove('disabled'); }
+  }, 45000);
 })();
 window.addEventListener('error', function(e){
   var t=document.getElementById('toasts');
