@@ -1,5 +1,5 @@
 import * as THREE from "three"
-import { heightAt } from "./world.js"
+import { heightAt, hitAssetAt } from "./world.js"
 import { audio } from "./audio.js"
 import { S } from "./state.js"
 
@@ -28,10 +28,12 @@ function isTyping() {
 function uiBlocking() {
   const $ = (id) => document.getElementById(id)
   return !$("battle").classList.contains("hidden") ||
-    !$("notebook").classList.contains("hidden") ||
     !$("plan").classList.contains("hidden") ||
     !$("win").classList.contains("hidden") ||
-    !$("title").classList.contains("hidden")
+    !$("title").classList.contains("hidden") ||
+    !$("todo").classList.contains("hidden") ||
+    !$("deed").classList.contains("hidden") ||
+    !$("ai").classList.contains("hidden")
 }
 
 function buildHorse() {
@@ -641,6 +643,7 @@ export class Player {
     this.kb = new THREE.Vector3()
     this.enemies = []
     this.onSwingHit = null
+    this.onAssetHit = null
     this.onSlashFx = null
     this.keys = {}
     this.mouse = { down: false, lx: 0, ly: 0 }
@@ -705,6 +708,7 @@ export class Player {
     }
     this.stamina = Math.max(0, this.stamina - 0.12)
     if (document.getElementById("battle").classList.contains("hidden") === false) return
+    if (uiBlocking()) return
     let dx = 0, dz = 0
     if (this.keys.KeyW || this.keys.ArrowUp) dz -= 1
     if (this.keys.KeyS || this.keys.ArrowDown) dz += 1
@@ -727,6 +731,7 @@ export class Player {
 
   tryAttack() {
     if (document.getElementById("battle").classList.contains("hidden") === false) return
+    if (uiBlocking()) return
     if (this.execT >= 0 || this.rollT >= 0) return
     if (this.attackT >= 0) {
       if (this.attackT / this.swingDur > 0.45) this.attackQueued = true
@@ -775,6 +780,10 @@ export class Player {
       if (d < bestD) { bestD = d; best = e }
     }
     if (best) this.onSwingHit?.(best, this.comboIdx === 2 ? 2 : 1)
+    else {
+      const hit = hitAssetAt(this.group.position.x, this.group.position.z, fwx, fwz, reach)
+      if (hit) this.onAssetHit?.(hit.item, hit.destroyed, this.comboIdx === 2 ? 2 : 1)
+    }
   }
 
   faceTowards(x, z) {
@@ -799,10 +808,12 @@ export class Player {
 
   update(dt) {
     const battleOpen = !document.getElementById("battle").classList.contains("hidden")
-    const nbOpen = !document.getElementById("notebook").classList.contains("hidden")
     const planOpen = !document.getElementById("plan").classList.contains("hidden")
     const winOpen = !document.getElementById("win").classList.contains("hidden")
-    const anyUI = battleOpen || nbOpen || planOpen || winOpen || !document.getElementById("title").classList.contains("hidden")
+    const todoOpen = !document.getElementById("todo").classList.contains("hidden")
+    const deedOpen = !document.getElementById("deed").classList.contains("hidden")
+    const aiOpen = !document.getElementById("ai").classList.contains("hidden")
+    const anyUI = battleOpen || planOpen || winOpen || todoOpen || deedOpen || aiOpen || !document.getElementById("title").classList.contains("hidden")
 
     let mx = 0, mz = 0
     if (!anyUI && this.execT < 0) {

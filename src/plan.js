@@ -1,6 +1,7 @@
 import { BATTLES, BOSS } from "./data/curriculum.js"
-import { S } from "./state.js"
+import { S, saveGame } from "./state.js"
 import { audio } from "./audio.js"
+import { savePlan } from "./obsidian.js"
 
 const $ = (id) => document.getElementById(id)
 const keyOf = (i) => BATTLES[i].id
@@ -79,8 +80,12 @@ export function showPlan() {
   audio.fanfare()
 }
 
-export function savePlanToNotebook() {
+export function savePlanToVault() {
   S.notes["plan"] = { title: "Quarterly Marketing Plan", text: buildPlanText() }
+  saveGame()
+  try {
+    savePlan(S.notes["plan"].text).catch(() => {})
+  } catch (e) {}
   audio.page()
   return true
 }

@@ -45,6 +45,23 @@ function h0(x, z) {
   return h
 }
 
+/** Find the destructible asset in front of a point and hit it. */
+export function hitAssetAt(px, pz, fwx, fwz, reach = 3.6) {
+  let best = null, bestD = 1e9
+  for (const it of DESTRUCTIBLES) {
+    if (it.done || it.destT >= 0) continue
+    const dx = it.x - px, dz = it.z - pz
+    const d = Math.hypot(dx, dz)
+    if (d > reach) continue
+    const dot = (dx / (d || 1)) * fwx + (dz / (d || 1)) * fwz
+    if (dot < 0.55) continue
+    if (d < bestD) { bestD = d; best = it }
+  }
+  if (!best) return null
+  const destroyed = hitDestroyable(best)
+  return { item: best, destroyed }
+}
+
 const pathPts = []
 const smooth = (a, b, t) => a + (b - a) * t * t * (3 - 2 * t)
 
@@ -105,10 +122,66 @@ export function zoneAt(x, z) {
 }
 
 let windMats = []
-const anims = { banners: [], blades: [], fireflies: null, butterflies: [], birds: [], clouds: [], smokeTimer: 0, fountainTimer: 0 }
+const anims = { banners: [], blades: [], fireflies: null, butterflies: [], birds: [], clouds: [], smokeTimer: 0, fountainTimer: 0, destroying: [], destroySmoke: [] }
 let coinsGroup = null
 
 export function getCoins() { return coinsGroup }
+
+// ---- destructible assets (houses, trees) ----
+const DESTRUCTIBLES = []
+export function getDestroyables() { return DESTRUCTIBLES }
+
+function registerDestroyable(parent, group, { kind, label, icon = "🌳", hp = 1, rx = 2.2, rz = 2.2 }) {
+  const y = group.position.y
+  const item = {
+    id: "a" + DESTRUCTIBLES.length + Date.now().toString(36),
+    kind, label, icon,
+    group, parent,
+    x: group.position.x, y, z: group.position.z,
+    hp, maxHp: hp, done: false,
+    hitT: 0, destT: -1, rx, rz
+  }
+  DESTRUCTIBLES.push(item)
+  return item
+}
+
+function makeRuins(item) {
+  const g = new THREE.Group()
+  const stoneCols = ["#8d8a80", "#9b9484", "#7d786c"]
+  const blocks = []
+  const n = item.kind === "house" ? 7 : 2
+  for (let i = 0; i < n; i++) {
+    const m = box(0.6 + Math.random() * 1.1, 0.5 + Math.random() * 0.8, 0.6 + Math.random() * 1.1, stoneCols[i % stoneCols.length])
+    m.position.set((Math.random() - 0.5) * item.rx, 0.2, (Math.random() - 0.5) * item.rz)
+    m.rotation.set((Math.random() - 0.5) * 0.3, Math.random() * Math.PI, (Math.random() - 0.5) * 0.3)
+    g.add(m)
+    blocks.push(m)
+  }
+  if (item.kind === "tree") {
+    const stump = cyl(0.4, 0.62, 0.7, "#6b4a30", {}, 7)
+    stump.position.set(0, 0.35, 0)
+    g.add(stump)
+  }
+  g.position.set(item.x, item.y, item.z)
+  g.visible = false
+  item.parent.add(g)
+  return { group: g, blocks }
+}
+
+/** Reduce an asset's hp; returns true the frame it falls. */
+export function hitDestroyable(item, dirX = 0, dirZ = 0) {
+  if (!item || item.done || item.destT >= 0) return false
+  item.hp -= 1
+  item.hitT = 0.18
+  if (item.hp <= 0) {
+    item.done = true
+    item.destT = 0
+    const ruins = makeRuins(item)
+    anims.destroying.push({ item, ruins, t: 0, dur: item.kind === "tree" ? 0.7 : 0.9, dirX, dirZ })
+    return true
+  }
+  return false
+}
 
 const windChunk = `
 uniform float uTime;
@@ -570,6 +643,7 @@ function house(parent, x, z, ry, w = 7, d = 6, h = 4.5, roofColor = "#9a5a3c") {
   gr.position.set(x, y, z)
   gr.rotation.y = ry
   parent.add(gr)
+  return gr
 }
 
 function lantern(parent, x, z) {
@@ -730,13 +804,19 @@ function buildVillage(parent) {
   anims.fountainPos = new THREE.Vector3(0, 2.6, 8)
   v.add(fountain)
 
-  house(v, -16, -6, 0.4, 8, 7, 5, "#9a5a3c")
-  house(v, 17, -4, -0.5, 7, 6, 4.5, "#a5663f")
-  house(v, -20, 16, 1.1, 6.5, 5.5, 4, "#8f5c40")
-  house(v, 21, 14, -1.2, 7.5, 6, 4.5, "#9a5a3c")
-  house(v, -8, 30, 2.6, 6, 5, 4, "#a5663f")
-  house(v, 9, 31, -2.4, 6, 5, 4, "#8f5c40")
-  house(v, -30, 2, 0.9, 6.5, 5.5, 4.2, "#9a5a3c")
+  const houseDefs = [
+    [-16, -6, 0.4, 8, 7, 5, "#9a5a3c", "Cottage of Dilnoza"],
+    [17, -4, -0.5, 7, 6, 4.5, "#a5663f", "The Chalk House"],
+    [-20, 16, 1.1, 6.5, 5.5, 4, "#8f5c40", "The Robin's Rest"],
+    [21, 14, -1.2, 7.5, 6, 4.5, "#9a5a3c", "Founder's Board"],
+    [-8, 30, 2.6, 6, 5, 4, "#a5663f", "The East Gatehouse"],
+    [9, 31, -2.4, 6, 5, 4, "#8f5c40", "The Lantern House"],
+    [-30, 2, 0.9, 6.5, 5.5, 4.2, "#9a5a3c", "The Old Merchant's Home"]
+  ]
+  for (const [hx, hz, hry, hw, hd, hh, hrc, label] of houseDefs) {
+    const gr = house(v, hx, hz, hry, hw, hd, hh, hrc)
+    registerDestroyable(v, gr, { kind: "house", label, icon: "🏠", hp: 2, rx: hw, rz: hd })
+  }
 
   for (let i = 0; i < 2; i++) {
     const stall = new THREE.Group()
@@ -906,6 +986,36 @@ function scatter(count, zone, minDist = 45, maxDist = 195, near = null, spread =
   return out
 }
 
+const TREE_NAMES = ["Oak", "Ironwood", "Fallow Elm", "The Old Willow", "Guild Pine", "Sentinel Oak", "The Whispering Birch"]
+function heroTree(parent, x, z, name) {
+  const g = new THREE.Group()
+  const s = 1 + Math.random() * 0.35
+  const trunk = cyl(0.34, 0.54, 2.7, "#5f4128", {}, 9)
+  trunk.position.y = 1.35
+  g.add(trunk)
+  const trunk2 = cyl(0.22, 0.34, 2.2, "#6b4a30", {}, 8)
+  trunk2.position.y = 3.6
+  g.add(trunk2)
+  const f1 = new THREE.Mesh(new THREE.SphereGeometry(2.7, 10, 8).scale(1, 0.85, 1), (() => { const m = mat("#558a4e"); windify(m, 0.6); return m })())
+  f1.position.y = 5.7
+  g.add(f1)
+  const f2 = new THREE.Mesh(new THREE.SphereGeometry(1.8, 10, 8), (() => { const m = mat("#6da161"); windify(m, 0.8); return m })())
+  f2.position.set(0, 7.9, 0)
+  g.add(f2)
+  const f3 = new THREE.Mesh(new THREE.SphereGeometry(1.2, 9, 7), (() => { const m = mat("#7dae6a"); windify(m, 0.95); return m })())
+  f3.position.set(0, 8.9, 0)
+  g.add(f3)
+  const f4 = new THREE.Mesh(new THREE.SphereGeometry(1.1, 9, 7), (() => { const m = mat("#558a4e"); windify(m, 0.9); return m })())
+  f4.position.set(0, 10.1, 0)
+  g.add(f4)
+  g.scale.setScalar(s)
+  g.position.set(x, heightAt(x, z), z)
+  g.traverse((o) => { if (o.isMesh) { o.castShadow = true } })
+  parent.add(g)
+  registerDestroyable(parent, g, { kind: "tree", label: name || "Oak", icon: "🌳", hp: 1, rx: 2.4, rz: 2.4 })
+  return g
+}
+
 function buildWoods(parent) {
   const trunks = scatter(120, "woods").map(p => ({ ...p, y: p.y, s: 0.9 + Math.random() * 0.5 }))
   instanced(parent, new THREE.CylinderGeometry(0.34, 0.54, 2.7, 9).translate(0, 1.35, 0), mat("#5f4128"), trunks)
@@ -961,6 +1071,11 @@ function buildWoods(parent) {
   }
   instanced(parent, new THREE.SphereGeometry(0.16, 6, 5).translate(0, 0.16, 0),
     (() => { const m = mat("#f7cadd"); windify(m, 0.9); return m })(), bpetals, { shadow: false })
+
+  const heroSpots = scatter(14, "woods", 55, 185)
+  heroSpots.forEach((p, i) => {
+    heroTree(parent, p.x, p.z, TREE_NAMES[i % TREE_NAMES.length])
+  })
 
   const shrooms = scatter(60, "woods", 45, 190)
   instanced(parent, new THREE.CylinderGeometry(0.18, 0.25, 0.55, 6).translate(0, 0.27, 0), mat("#f0e6d2"), shrooms.map(s => ({ ...s, s: 0.8 + Math.random() })))
@@ -1526,6 +1641,42 @@ export function updateWorld(t, dt, fx) {
     u.w1.rotation.y = flap
     u.w2.rotation.y = -flap
   })
+  if (anims.destroying && anims.destroying.length) {
+    for (const d of anims.destroying) {
+      d.t += dt
+      const k = Math.min(1, d.t / d.dur)
+      const ease = k < 0.6 ? k / 0.6 : 1 - Math.pow(1 - (k - 0.6) / 0.4, 2)
+      const drop = (d.item.kind === "tree" ? 3.4 : 4.5) * ease
+      d.item.group.position.y = d.item.y - drop
+      const scale = d.item.kind === "tree" ? Math.max(0.05, 1 - k) : Math.max(0.3, 1 - k * 0.7)
+      d.item.group.scale.setScalar(scale)
+      d.item.group.rotation.y += dt * 3 * ease
+      if (Math.random() < dt * 10) fx.burst("dust", d.item.x + (Math.random() - 0.5) * 2, d.item.y + 0.4, d.item.z + (Math.random() - 0.5) * 2, 2)
+      if (d.t >= d.dur) {
+        d.item.group.visible = false
+        d.ruins.group.visible = true
+        const P = d.item
+        if (P.kind === "tree") {
+          fx.burst("spark", P.x, P.y + 4, P.z, 10)
+          fx.burst("dust", P.x, P.y + 1, P.z, 18)
+          for (let i = 0; i < 16; i++) fx.emit(P.x + (Math.random() - 0.5) * 2.2, P.y + 2 + Math.random() * 3.5, P.z + (Math.random() - 0.5) * 2.2, (Math.random() - 0.5) * 3, 1.5 + Math.random() * 2.2, (Math.random() - 0.5) * 3, 0.34, 0.62, 0.25, 1.5, -1.6)
+        } else {
+          fx.burst("dust", P.x, P.y + 1.6, P.z, 24)
+          fx.burst("spark", P.x, P.y + 2.6, P.z, 16)
+        }
+        anims.destroySmoke.push({ x: P.x, y: P.y + (P.kind === "tree" ? 1.1 : 2.8), z: P.z, t: 0 })
+        d.done = true
+      }
+    }
+    anims.destroying = anims.destroying.filter(x => !x.done)
+  }
+  if (anims.destroySmoke && anims.destroySmoke.length) {
+    for (const s of anims.destroySmoke) {
+      s.t += dt
+      if (s.t < 3.4 && Math.random() < dt * 7) fx.emit(s.x + (Math.random() - 0.5) * 0.9, s.y + Math.random() * 1.4, s.z + (Math.random() - 0.5) * 0.9, (Math.random() - 0.5) * 0.3, 1.5, (Math.random() - 0.5) * 0.3, 0.72, 0.72, 0.7, 2.2, 0.15)
+    }
+    anims.destroySmoke = anims.destroySmoke.filter(s => s.t < 4)
+  }
   anims.smokeTimer -= dt
   if (anims.petalTimer === undefined) anims.petalTimer = 0
   anims.petalTimer -= dt

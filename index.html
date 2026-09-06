@@ -22,13 +22,34 @@
     <div id="hud-stamina"><div id="hud-stamina-fill"></div></div>
     <div id="hud-right">
       <div id="hud-progress">📜 0/20</div>
-      <button id="btn-notebook" title="Notebook (Tab)">📓</button>
+      <div id="obsidian-status" data-state="queued" title="Obsidian vault sync (writes to C:\Users\bluep\Azizbek when running locally)">○ Obsidian</div>
     </div>
+    <button id="ai-toggle" class="ai-toggle" title="AI Business Coach — reads your Obsidian vault">✨</button>
     <div id="hud-hint" class="hidden"></div>
     <div id="hud-zone" class="hidden"></div>
   </div>
 
   <div id="toasts"></div>
+
+  <div id="ai" class="overlay hidden">
+    <div class="ai-panel">
+      <div class="ai-head">
+        <div class="ai-seal">🦉</div>
+        <div class="ai-title-wrap">
+          <h2>The AI Coach</h2>
+          <div class="ai-sub">reads your Obsidian vault · coaches your business · saves new facts to <i>Extra details</i></div>
+        </div>
+        <div id="ai-status" class="ai-status" data-state="off">○ offline</div>
+        <button id="ai-close" class="btn-soft ai-close" title="Close the Coach">✕</button>
+      </div>
+      <div id="ai-messages" class="ai-messages"></div>
+      <div class="ai-composer">
+        <textarea id="ai-input" rows="2" placeholder="Ask the Coach anything about your business…"></textarea>
+        <button id="ai-send" class="btn-gold">Ask ⚔</button>
+      </div>
+      <div class="ai-foot">Right-click a selection inside any message to create a task in your vault.</div>
+    </div>
+  </div>
 
   <div id="battle" class="overlay hidden">
     <div class="battle-panel">
@@ -43,44 +64,60 @@
           <span id="b-clock">1:00</span>
         </div>
       </div>
-      <div class="cmo-row">
-        <div class="cmo-avatar">🦉</div>
-        <div class="cmo-bubble">
-          <div class="cmo-name">The Chief Marketing Owl</div>
-          <div id="b-lesson"></div>
+      <div class="battle-tabs">
+        <button id="btab-question" class="battle-tab active" type="button">📜 Question</button>
+        <button id="btab-todo" class="battle-tab" type="button">✅ Task List</button>
+      </div>
+      <div id="b-pane-question">
+        <div class="cmo-row">
+          <div class="cmo-avatar">🦉</div>
+          <div class="cmo-bubble">
+            <div class="cmo-name">The Chief Marketing Owl</div>
+            <div id="b-lesson"></div>
+          </div>
         </div>
+        <div id="b-question"></div>
+        <textarea id="b-input" rows="4" placeholder="Write your answer, founder..."></textarea>
+        <div class="battle-actions">
+          <button id="b-example" class="btn-soft">📜 Example</button>
+          <div id="b-nudge"></div>
+          <button id="b-submit" class="btn-gold">Inscribe Answer ⚔</button>
+        </div>
+        <div id="b-hearts">❤❤❤❤❤</div>
       </div>
-      <div id="b-question"></div>
-      <textarea id="b-input" rows="4" placeholder="Write your answer, founder..."></textarea>
-      <div class="battle-actions">
-        <button id="b-example" class="btn-soft">📜 Example</button>
-        <div id="b-nudge"></div>
-        <button id="b-submit" class="btn-gold">Inscribe Answer ⚔</button>
-      </div>
-      <div id="b-hearts">❤❤❤❤❤</div>
-    </div>
-  </div>
-
-  <div id="notebook" class="hidden">
-    <div class="nb-side">
-      <div class="nb-title">📓 Founder's Notebook</div>
-      <div id="nb-list"></div>
-      <div class="nb-foot">
-        <button id="nb-export" class="btn-soft">Download .md</button>
-        <button id="nb-reset" class="btn-soft danger">Reset Game</button>
-        <button id="nb-close" class="btn-gold">Close (Tab)</button>
-      </div>
-    </div>
-    <div class="nb-main">
-      <input id="nb-entry-title" placeholder="Entry title">
-      <textarea id="nb-entry-text" placeholder="Write freely, founder. This is yours."></textarea>
-      <div id="nb-saved">Saved ✓</div>
+      <div id="b-pane-todo" class="hidden"></div>
     </div>
   </div>
 
   <div id="coin-card" class="hidden">
     <div class="coin-title" id="coin-title"></div>
     <div class="coin-tip" id="coin-tip"></div>
+  </div>
+
+  <div id="todo" class="overlay hidden">
+    <div class="todo-panel">
+      <div class="todo-head">
+        <div class="todo-title-wrap">
+          <h2>📜 The Ledger of Deeds</h2>
+          <div id="todo-sub"></div>
+        </div>
+        <button id="todo-close" class="btn-soft">✕ Close</button>
+      </div>
+      <div id="todo-slot"></div>
+    </div>
+  </div>
+
+  <div id="deed" class="overlay hidden">
+    <div class="deed-panel">
+      <div class="deed-icon" id="deed-icon">🌳</div>
+      <h3 id="deed-title"></h3>
+      <p id="deed-text" class="deed-text"></p>
+      <div class="deed-actions">
+        <button id="deed-create" class="btn-gold">✍ Write a deed</button>
+        <button id="deed-open" class="btn-soft">📜 Open Ledger</button>
+        <button id="deed-dismiss" class="btn-soft">Dismiss</button>
+      </div>
+    </div>
   </div>
 
   <div id="plan" class="overlay hidden">
@@ -92,7 +129,7 @@
       </div>
       <div id="plan-body"></div>
       <div class="plan-actions">
-        <button id="plan-notebook" class="btn-soft">📓 Save to Notebook</button>
+        <button id="plan-obsidian" class="btn-soft">📓 Save plan to Obsidian</button>
         <button id="plan-close" class="btn-gold">Continue the Reign</button>
       </div>
     </div>
@@ -104,7 +141,7 @@
       <h1>Marketing Cleared</h1>
       <div class="win-sub">Level I — The CMO's Quest</div>
       <div id="win-stats"></div>
-      <p class="win-text">The Bull Market bows. Your notebook now holds a true quarterly plan,<br>built from twenty honest answers. Level II awaits, founder.</p>
+      <p class="win-text">The Bull Market bows. Your Obsidian vault now holds a true quarterly plan,<br>built from twenty honest answers. Level II awaits, founder.</p>
       <button id="win-close" class="btn-gold">Rule On</button>
     </div>
   </div>
@@ -120,7 +157,7 @@
         Twenty guardians hold twenty questions. Ride out. Answer honestly. The Bull Market guards the gate.</p>
       <div class="title-controls">
         <span><b>WASD</b> ride</span><span><b>Mouse</b> look</span><span><b>LMB</b> attack</span><span><b>RMB</b> defend</span>
-        <span><b>Shift</b> sprint</span><span><b>C</b> roll</span><span><b>E</b> answer (after knockdown)</span><span><b>H</b> horse (7/20)</span><span><b>Tab</b> notebook</span><span><b>Space</b> also attacks</span>
+        <span><b>Shift</b> sprint</span><span><b>C</b> roll</span><span><b>E</b> answer (after knockdown)</span><span><b>H</b> horse (7/20)</span><span><b>Space</b> also attacks</span>
       </div>
       <button id="btn-begin" class="btn-gold big">Begin the Quest</button>
     </div>
@@ -131,6 +168,7 @@
   <div id="vignette"></div>
   <div id="whiteflash"></div>
   <button id="audio-toggle" title="Sound on/off">♪</button>
+  <button id="todo-toggle" title="The Ledger of Deeds (Tasks.md)">☑ <span class="todo-count-badge zero">0</span></button>
 </div>
 <script>
 // Fallback: ensure Begin works even if module fails — runs immediately

@@ -4,3 +4,4 @@ dist
 *.pid
 smoke*.png
 .DS_Store
+.env

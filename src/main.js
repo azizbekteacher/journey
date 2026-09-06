@@ -9,8 +9,10 @@ import { FX } from "./fx.js"
 import { Player } from "./player.js"
 import { EnemyManager } from "./enemies.js"
 import { Combat } from "./combat.js"
-import { Notebook } from "./notebook.js"
-import { showPlan, savePlanToNotebook } from "./plan.js"
+import { initVaultSync, saveTip } from "./obsidian.js"
+import { showPlan, savePlanToVault } from "./plan.js"
+import { todo } from "./todo.js"
+import { initAI } from "./ai.js"
 import { FACTS, BATTLES, BOSS, COIN_LESSONS, ZONES } from "./data/curriculum.js"
 import { S, saveGame, loadGame, progressCount, MAX_HEARTS } from "./state.js"
 import { audio } from "./audio.js"
@@ -118,7 +120,7 @@ const enemyMgr = new EnemyManager(scene, fx, {
     player.stamina = Math.min(1, player.stamina + 0.2)
   },
   onKnockdown(e) {
-    if (!combat.open && !notebook.isOpen()) combat.show(e)
+    if (!combat.open) combat.show(e)
   }
 })
 player.enemies = enemyMgr.enemies
@@ -132,6 +134,23 @@ player.onSwingHit = (e, dmg) => {
 player.onSlashFx = (big) => {
   const y = player.pos.y + (player.mounted ? 3.4 : 2.1)
   fx.slash(player.pos.x, y, player.pos.z, player.yaw + Math.PI, big)
+}
+player.onAssetHit = (item, destroyed, dmg) => {
+  const P = item.group.position
+  fx.burst("spark", P.x, P.y + item.kind === "tree" ? 3 : 2, P.z, dmg > 1 ? 14 : 9)
+  fx.ring(P.x, P.y + 0.2, P.z, "#e8d9b0", 2, 0.4)
+  audio.clang()
+  if (destroyed) {
+    const reward = item.kind === "house" ? 10 : 5
+    S.gold += reward
+    saveGame()
+    updateHUD()
+    audio.hit()
+    toast(`⚔ ${item.label} falls — +${reward} gold`)
+    setTimeout(() => showDeedPopup(item), 500)
+  } else {
+    toast(`💥 ${item.label} takes the blow (${Math.max(0, item.hp)} left)`)
+  }
 }
 
 const combat = new Combat({
@@ -152,14 +171,72 @@ const combat = new Combat({
       toast("\ud83d\udea9 You awaken at the Keep fountain. Your truths remain yours.")
       $("fade").classList.remove("on")
     }, 800)
+  },
+  onShowTodo() {
+    todo.openInBattle($("b-pane-todo"))
+  },
+  onHideTodo() {
+    if (todo.active === "battle") todo.closeAll()
   }
 })
-const notebook = new Notebook()
-
 const loaded = loadGame()
 for (const f of FACTS) {
   if (!S.notes[f.id]) S.notes[f.id] = { title: f.title, text: f.text }
 }
+try { initVaultSync() } catch (e) {}
+initTodo()
+
+function initTodo() {
+  todo.onTick((task, done) => {
+    if (done && combat.open && !combat.done) {
+      combat.completeByTask(task)
+    }
+  })
+  todo.init()
+  $("todo-toggle").addEventListener("click", () => {
+    if (todo.active === "overlay") todo.closeOverlay()
+    else if (combat.open) combat.setTab("todo")
+    else todo.openOverlay()
+  })
+  $("todo-close").addEventListener("click", () => todo.closeOverlay())
+  $("deed-create").addEventListener("click", () => {
+    $("deed").classList.add("hidden")
+    todo.openOverlay()
+    setTimeout(() => {
+      const newBtn = document.querySelector(".todo-app .ta-new")
+      newBtn?.click()
+      const title = document.querySelector("#qa-title")
+      if (title) title.focus()
+    }, 60)
+  })
+  $("deed-open").addEventListener("click", () => {
+    $("deed").classList.add("hidden")
+    todo.openOverlay()
+  })
+  $("deed-dismiss").addEventListener("click", () => {
+    $("deed").classList.add("hidden")
+    document.getElementById("game")?.requestPointerLock?.()
+  })
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      if (todo.active === "overlay") { todo.closeOverlay(); e.stopPropagation() }
+      else if (!$("deed").classList.contains("hidden")) { $("deed").classList.add("hidden"); document.getElementById("game")?.requestPointerLock?.() }
+    }
+  })
+}
+
+function showDeedPopup(item) {
+  const isTree = item.kind === "tree"
+  $("deed-icon").textContent = item.icon
+  $("deed-title").textContent = isTree ? `${item.label} is felled` : `${item.label} lies in ruins`
+  $("deed-text").textContent = isTree
+    ? "The wood is cleared. A deed waits to be written — what shall you build, cut down, or begin in this quarter?"
+    : "Bricks and beam fall to your blade. Every ruin is a question: what will you rebuild here before the quarter ends?"
+  $("deed").classList.remove("hidden")
+  document.exitPointerLock?.()
+  audio.page()
+}
+const ai = initAI()
 if (loaded) {
   for (const coin of getCoins().children) {
     if (S.coinsTaken[coin.userData.coinIndex]) coin.visible = false
@@ -195,9 +272,9 @@ $("plan-close").addEventListener("click", () => {
   $("win").classList.remove("hidden")
   audio.bigFanfare()
 })
-$("plan-notebook").addEventListener("click", () => {
-  savePlanToNotebook()
-  toast("\ud83d\udcd3 The plan rests in your Notebook.")
+$("plan-obsidian").addEventListener("click", () => {
+  savePlanToVault()
+  toast("\ud83d\udcd3 The plan rests in your Obsidian vault.")
 })
 $("win-close").addEventListener("click", () => {
   $("win").classList.add("hidden")
@@ -290,26 +367,28 @@ function onVictory(enemy, challenge, val) {
 }
 
 let eDown = false
+function isTyping() {
+  const a = document.activeElement
+  if (!a) return false
+  const tag = a.tagName
+  if (tag === "TEXTAREA" || tag === "INPUT") return true
+  return false
+}
 window.addEventListener("keydown", (e) => {
-  const tag = document.activeElement?.tagName
-  if (tag === "TEXTAREA" || tag === "INPUT") return
-  if (e.code === "Tab") {
-    e.preventDefault()
-    notebook.toggle()
+  if (isTyping()) {
+    e.stopPropagation()
     return
   }
   if (e.code === "KeyE" && !eDown) {
     eDown = true
     tryChallenge()
   }
-  if (e.code === "Escape") {
-    notebook.toggle(false)
-  }
-})
+}, true)
 window.addEventListener("keyup", (e) => { if (e.code === "KeyE") eDown = false })
 
 function tryChallenge() {
-  if (combat.open || notebook.isOpen() || !$("title").classList.contains("hidden")) return
+  if (combat.open || ai.isOpen() || !$("title").classList.contains("hidden")) return
+  if (!$("todo").classList.contains("hidden") || !$("deed").classList.contains("hidden")) return
   const e = enemyMgr.near
   if (!e) return
   if (!e.battle) {
@@ -472,7 +551,7 @@ function animate() {
   sun.position.set(player.pos.x - 60, player.pos.y + 80, player.pos.z + 70)
   sun.target.position.copy(player.pos)
   sun.target.updateMatrixWorld()
-  const uiOpen = combat.open || notebook.isOpen() || !$("title").classList.contains("hidden") || !$("plan").classList.contains("hidden") || !$("win").classList.contains("hidden")
+  const uiOpen = combat.open || ai.isOpen() || !$("title").classList.contains("hidden") || !$("plan").classList.contains("hidden") || !$("win").classList.contains("hidden") || !$("todo").classList.contains("hidden") || !$("deed").classList.contains("hidden")
   enemyMgr.update(dt, t, player, uiOpen)
   regenTick(rawDt, uiOpen)
   updateWorld(t, dt, fx)
@@ -519,6 +598,9 @@ function animate() {
       if (lesson && !S.notes[`coin${ci}`]) {
         S.notes[`coin${ci}`] = { title: lesson.title, text: lesson.tip }
         saveGame()
+        try {
+          saveTip(`coin${ci}`, lesson.title, lesson.tip).catch(() => {})
+        } catch (e) {}
         showCard(`\ud83e\ude99 ${lesson.title}`, lesson.tip, 7000)
       } else {
         toast("+5 gold")
@@ -531,7 +613,7 @@ function animate() {
     }
   }
 
-  if (!combat.open && !notebook.isOpen()) {
+  if (!combat.open) {
     const e = enemyMgr.near
     if (e) {
       setHint(e.down ? `[ E ] Demand its answer: ${e.battle.title}` : e.battle ? `[ E ] Challenge: ${e.battle.title} (${NAMES_LABEL(e)})` : `[ E ] Face the Bull Market`)

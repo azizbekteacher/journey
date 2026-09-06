@@ -1,19 +1,24 @@
 import { BATTLES, BOSS, NUDGES, TIMEOUT_NUDGES, PRAISES, MODULE_NAMES, ZONES } from "./data/curriculum.js"
 import { S, saveGame, progressCount, MAX_HEARTS } from "./state.js"
 import { audio } from "./audio.js"
+import { saveAnswer } from "./obsidian.js"
 
 const $ = (id) => document.getElementById(id)
 
 export class Combat {
-  constructor({ onVictory, onDefeatDamage, onRespawn }) {
+  constructor({ onVictory, onDefeatDamage, onRespawn, onShowTodo, onHideTodo }) {
     this.onVictory = onVictory
     this.onDefeatDamage = onDefeatDamage
     this.onRespawn = onRespawn
+    this.onShowTodo = onShowTodo
+    this.onHideTodo = onHideTodo
     this.current = null
     this.timeLeft = 0
     this.timerId = null
     this.nudgeIdx = 0
     this.open = false
+    this.tab = "question"
+    this.done = false
 
     $("b-submit").addEventListener("click", () => this.submit())
     $("b-example").addEventListener("click", () => {
@@ -35,6 +40,23 @@ export class Combat {
         this.submit()
       }
     })
+    $("btab-question").addEventListener("click", () => this.setTab("question"))
+    $("btab-todo").addEventListener("click", () => this.setTab("todo"))
+  }
+
+  setTab(tab) {
+    if (!this.open) return
+    this.tab = tab === "todo" ? "todo" : "question"
+    $("btab-question").classList.toggle("active", this.tab === "question")
+    $("btab-todo").classList.toggle("active", this.tab === "todo")
+    $("b-pane-question").classList.toggle("hidden", this.tab !== "question")
+    $("b-pane-todo").classList.toggle("hidden", this.tab !== "todo")
+    if (this.tab === "todo") {
+      this.onShowTodo?.()
+    } else {
+      this.onHideTodo?.()
+      $("b-input").focus()
+    }
   }
 
   startTimer(seconds) {
@@ -104,10 +126,46 @@ export class Combat {
     $("b-hearts").textContent = "\u2764".repeat(Math.max(0, S.hearts)) + "\u2661".repeat(MAX_HEARTS - Math.max(0, S.hearts))
     const secs = challenge ? 180 : ((battle || {}).hard ? 180 : 60)
     this.open = true
+    this.done = false
     $("battle").classList.remove("hidden")
+    this.setTab("question")
     $("b-input").focus()
     this.startTimer(secs)
     audio.page()
+  }
+
+  /** Win the battle by ticking a deed/subtask from the Task List tab. */
+  completeByTask(task) {
+    if (!this.current || this.done) return
+    const val = (task.title || "").trim()
+      + (task.desc && String(task.desc).trim() ? "\n" + String(task.desc).trim() : "")
+    const b = this.current.challenge
+    const battle = this.current.enemy.battle
+    if (!val) {
+      $("b-nudge").textContent = "✎ A deed with a title can slay the guardian — open it and give it one."
+      $("b-nudge").style.color = "#a63a2e"
+      audio.hit()
+      return
+    }
+    clearInterval(this.timerId)
+    const key = battle ? battle.id : b.key
+    S.notes[key] = { ...(S.notes[key] || {}), title: battle ? battle.title : b.title, text: val, draft: val }
+    saveGame()
+    try {
+      saveAnswer(key, battle ? battle.title : b.title, val, (b || battle).question).catch(() => {})
+    } catch (e) {}
+    $("b-nudge").textContent = "✓ The deed is inscribed — the guardian falls."
+    $("b-nudge").style.color = "#3f6f4f"
+    $("b-submit").disabled = true
+    $("battle").querySelector(".battle-panel").classList.add("success")
+    audio.clang()
+    const cur = this.current
+    this.done = true
+    setTimeout(() => {
+      $("b-submit").disabled = false
+      this.close()
+      this.onVictory(cur.enemy, cur.challenge, val)
+    }, 900)
   }
 
   submit() {
@@ -129,6 +187,9 @@ export class Combat {
     const key = battle ? battle.id : b.key
     S.notes[key] = { ...(S.notes[key] || {}), title: battle ? battle.title : b.title, text: val, draft: val }
     saveGame()
+    try {
+      saveAnswer(key, battle ? battle.title : b.title, val, (b || battle).question).catch(() => {})
+    } catch (e) {}
     const praise = PRAISES[Math.floor(Math.random() * PRAISES.length)]
     $("b-nudge").textContent = `\u2713 ${praise}`
     $("b-nudge").style.color = "#3f6f4f"
@@ -148,6 +209,7 @@ export class Combat {
     this.open = false
     this.current = null
     $("battle").classList.add("hidden")
+    this.onHideTodo?.()
   }
 }
 

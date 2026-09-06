@@ -277,5 +277,5 @@ export const COIN_LESSONS = [
   { zone: "highlands", title: "Seasons matter", tip: "IELTS deadlines, university admissions, New Year resolutions: plan campaigns on Uzbekistan's calendar, not on vibes." },
   { zone: "highlands", title: "Track the ask", tip: "Every week log what objections the salesman hears. Those objections are next month's content plan." },
   { zone: "highlands", title: "The follow-up fortune", tip: "Most enrollments happen after the 2nd or 3rd touch. A polite follow-up sequence is often worth more than new ads." },
-  { zone: "highlands", title: "Quarterly review ritual", tip: "Every 90 days, sit with your numbers and this notebook. Keep what worked, bury what did not, write the next plan." }
+  { zone: "highlands", title: "Quarterly review ritual", tip: "Every 90 days, sit with your numbers and your vault notes. Keep what worked, bury what did not, write the next plan." }
 ]
