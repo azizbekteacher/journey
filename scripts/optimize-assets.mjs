@@ -98,7 +98,7 @@ async function compressTextures(doc, file) {
   if (doc.getRoot().listTextures().length === 0) return "none"
   for (const fmt of ["webp", "jpeg"]) {
     try {
-      await textureCompress({ encoder: sharp, targetFormat: fmt, resize: [1024, 1024] })(doc)
+      await textureCompress({ encoder: sharp, targetFormat: fmt, resize: [2048, 2048] })(doc)
       return fmt
     } catch (e) {
       console.warn(`  [optimize] texture ${fmt} failed for ${path.basename(file)}: ${e.message}`)

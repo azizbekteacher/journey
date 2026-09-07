@@ -284,25 +284,28 @@ function windify(mat, strength = 1) {
 }
 
 function groundMat() {
+  const N = 512
   const c = document.createElement("canvas")
-  c.width = c.height = 256
+  c.width = c.height = N
   const ctx = c.getContext("2d")
-  const img = ctx.createImageData(256, 256)
-  const lat = new Float32Array(256 * 256)
+  const img = ctx.createImageData(N, N)
+  const lat = new Float32Array(N * N)
   for (let i = 0; i < lat.length; i++) lat[i] = Math.random()
   const val = (x, y) => {
-    const xi = Math.floor(x) & 255, yi = Math.floor(y) & 255
+    const xi = Math.floor(x) & (N - 1), yi = Math.floor(y) & (N - 1)
     const xf = x - Math.floor(x), yf = y - Math.floor(y)
     const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf)
-    const x1 = (xi + 1) & 255, y1 = (yi + 1) & 255
-    const a = lat[yi * 256 + xi], b = lat[yi * 256 + x1]
-    const d = lat[y1 * 256 + xi], e = lat[y1 * 256 + x1]
+    const x1 = (xi + 1) & (N - 1), y1 = (yi + 1) & (N - 1)
+    const a = lat[yi * N + xi], b = lat[yi * N + x1]
+    const d = lat[y1 * N + xi], e = lat[y1 * N + x1]
     return a + (b - a) * u + (d - a) * v + (a - b - d + e) * u * v
   }
-  for (let y = 0; y < 256; y++) {
-    for (let x = 0; x < 256; x++) {
-      const n = val(x / 9, y / 9) * 0.6 + val(x / 3.5 + 41, y / 3.5 + 87) * 0.4
-      const i = (y * 256 + x) * 4
+  const H = new Float32Array(N * N)
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      const n = val(x / 9, y / 9) * 0.45 + val(x / 3.5 + 41, y / 3.5 + 87) * 0.33 + val(x / 1.7 + 133, y / 1.7 + 12) * 0.22
+      H[y * N + x] = n
+      const i = (y * N + x) * 4
       let g = 224 + (n - 0.5) * 34
       const r = Math.random()
       if (r > 0.982) g -= 34
@@ -317,7 +320,27 @@ function groundMat() {
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping
   tex.repeat.set(56, 56)
   tex.colorSpace = THREE.SRGBColorSpace
-  return new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.96, metalness: 0, map: tex })
+  const nc = document.createElement("canvas")
+  nc.width = nc.height = N
+  const nctx = nc.getContext("2d")
+  const nimg = nctx.createImageData(N, N)
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      const hl = H[y * N + ((x - 1 + N) % N)], hr = H[y * N + ((x + 1) % N)]
+      const hd = H[((y - 1 + N) % N) * N + x], hu = H[((y + 1) % N) * N + x]
+      const nx = (hl - hr) * 2.4, nz = (hd - hu) * 2.4
+      const i = (y * N + x) * 4
+      nimg.data[i] = Math.round((nx * 0.5 + 0.5) * 255)
+      nimg.data[i + 1] = Math.round((nz * 0.5 + 0.5) * 255)
+      nimg.data[i + 2] = 255
+      nimg.data[i + 3] = 255
+    }
+  }
+  nctx.putImageData(nimg, 0, 0)
+  const ntex = new THREE.CanvasTexture(nc)
+  ntex.wrapS = ntex.wrapT = THREE.RepeatWrapping
+  ntex.repeat.set(56, 56)
+  return new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.96, metalness: 0, map: tex, normalMap: ntex, normalScale: new THREE.Vector2(0.6, 0.6) })
 }
 
 // ---- terrain splat material (PBR layers from assets; per-vertex weights aw0/aw1) ----
@@ -447,8 +470,8 @@ const texCache = {}
 function tex(name, draw, rep = 3) {
   if (!texCache[name]) {
     const c = document.createElement("canvas")
-    c.width = c.height = 128
-    draw(c.getContext("2d"), 128)
+    c.width = c.height = 512
+    draw(c.getContext("2d"), 512)
     const t = new THREE.CanvasTexture(c)
     t.colorSpace = THREE.SRGBColorSpace
     t.wrapS = t.wrapT = THREE.RepeatWrapping
@@ -462,62 +485,102 @@ function boxTex(w, h, d, color, name, draw, opts = {}) {
   m.castShadow = true; m.receiveShadow = true
   return m
 }
-function coneTex(r, h, color, name, draw, seg = 8, opts = {}) {
+function coneTex(r, h, color, name, draw, seg = 16, opts = {}) {
   const m = new THREE.Mesh(new THREE.ConeGeometry(r, h, seg), mat(color, { map: tex(name, draw, 6), ...opts }))
   m.castShadow = true
   return m
 }
 
 const D_plaster = (x, s) => {
+  const u = s / 128
   x.fillStyle = "#f0e6ca"; x.fillRect(0, 0, s, s)
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < 120; i++) {
     x.fillStyle = `rgba(120,95,60,${0.05 + Math.random() * 0.08})`
-    x.fillRect(Math.random() * s, Math.random() * s, 4 + Math.random() * 9, 1.5)
+    x.fillRect(Math.random() * s, Math.random() * s, (4 + Math.random() * 9) * u, 1.5 * u)
   }
   x.fillStyle = "rgba(255,250,235,0.5)"
-  for (let i = 0; i < 14; i++) x.fillRect(Math.random() * s, Math.random() * s, 20 + Math.random() * 30, 2)
+  for (let i = 0; i < 42; i++) x.fillRect(Math.random() * s, Math.random() * s, (20 + Math.random() * 30) * u, 2 * u)
+  x.strokeStyle = "rgba(96,78,52,0.35)"
+  x.lineWidth = 0.9 * u
+  for (let i = 0; i < 5; i++) {
+    const sx = Math.random() * s, sy = Math.random() * s
+    x.beginPath()
+    x.moveTo(sx, sy)
+    x.bezierCurveTo(sx + (Math.random() - 0.5) * 30 * u, sy + 12 * u, sx + (Math.random() - 0.5) * 40 * u, sy + 26 * u, sx + (Math.random() - 0.5) * 44 * u, sy + 40 * u)
+    x.stroke()
+  }
 }
 const D_shingle = (x, s) => {
+  const u = s / 128
   x.fillStyle = "#6b4a30"; x.fillRect(0, 0, s, s)
-  const rows = 8, cols = 3
+  const rows = 12, cols = 4
   for (let r = 0; r < rows; r++) {
     for (let ccol = 0; ccol < cols; ccol++) {
       const ox = (ccol * (s / cols)) + (r % 2 ? s / (cols * 2) : 0)
       const oy = r * (s / rows)
+      const broken = Math.random() < 0.05
       x.fillStyle = `hsl(${26 + Math.floor(Math.random() * 8)}, 38%, ${34 + Math.random() * 14}%)`
       x.beginPath()
-      x.moveTo(ox + 1, oy + s / rows - 3)
-      x.quadraticCurveTo(ox + (s / cols) / 2, oy - 3, ox + (s / cols) - 1, oy + s / rows - 3)
-      x.lineTo(ox + (s / cols) - 1, oy + s / rows - 1)
-      x.lineTo(ox + 1, oy + s / rows - 1)
+      if (broken) {
+        const cut = ox + (s / cols) * (0.35 + Math.random() * 0.45)
+        x.moveTo(ox + 1, oy + s / rows - 3)
+        x.lineTo(cut, oy + s / rows - 3)
+        x.lineTo(cut, oy + s / rows - 1)
+        x.lineTo(ox + 1, oy + s / rows - 1)
+      } else {
+        x.moveTo(ox + 1, oy + s / rows - 3)
+        x.quadraticCurveTo(ox + (s / cols) / 2, oy - 3, ox + (s / cols) - 1, oy + s / rows - 3)
+        x.lineTo(ox + (s / cols) - 1, oy + s / rows - 1)
+        x.lineTo(ox + 1, oy + s / rows - 1)
+      }
       x.closePath(); x.fill()
+      x.fillStyle = "rgba(255,235,200,0.10)"
+      x.fillRect(ox + 2, oy + 2, (s / cols) - 4, 1.5 * u)
       x.fillStyle = "rgba(20,12,6,0.25)"
-      x.fillRect(ox + 1, oy + s / rows - 2, (s / cols) - 2, 1.5)
+      x.fillRect(ox + 1, oy + s / rows - 2, (s / cols) - 2, 1.5 * u)
     }
   }
 }
 const D_stone = (x, s) => {
+  const u = s / 128
   x.fillStyle = "#9a9484"; x.fillRect(0, 0, s, s)
-  const w = s / 4, hgt = s / 4
-  for (let r = 0; r < 4; r++) {
-    for (let ccol = 0; ccol < 4; ccol++) {
-      const ox = ccol * w + (r % 2 ? w / 2 : 0) - (r % 2 ? w / 2 : 0)
-      x.fillStyle = `hsl(${34}, ${8 + Math.random() * 7}%, ${52 + Math.random() * 16}%)`
-      x.fillRect(ox + 2, r * hgt + 2, w - 4, hgt - 4)
+  const w = s / 6, hgt = s / 6
+  for (let r = 0; r < 6; r++) {
+    for (let ccol = 0; ccol < 6; ccol++) {
+      const ox = ccol * w + (r % 2 ? w / 2 : 0)
+      const moss = Math.random() < 0.09
+      x.fillStyle = moss ? `hsl(${70 + Math.random() * 20}, ${12 + Math.random() * 10}%, ${38 + Math.random() * 10}%)` : `hsl(${34}, ${8 + Math.random() * 7}%, ${52 + Math.random() * 16}%)`
+      x.fillRect(ox + 2 * u, r * hgt + 2 * u, w - 4 * u, hgt - 4 * u)
+      x.fillStyle = "rgba(255,250,240,0.16)"
+      x.fillRect(ox + 2 * u, r * hgt + 2 * u, w - 4 * u, 1.5 * u)
+      x.fillStyle = "rgba(40,34,26,0.3)"
+      x.fillRect(ox + 2 * u, (r + 1) * hgt - 2.5 * u, w - 4 * u, 1.5 * u)
     }
     x.fillStyle = "rgba(40,34,26,0.4)"
-    x.fillRect(0, r * hgt, s, 2)
+    x.fillRect(0, r * hgt, s, 2 * u)
   }
 }
 const D_timber = (x, s) => {
+  const u = s / 128
   x.fillStyle = "#5d4630"; x.fillRect(0, 0, s, s)
-  for (let i = 0; i < 26; i++) {
-    x.strokeStyle = `rgba(35,22,10,${0.35 + Math.random() * 0.5})`
-    x.lineWidth = 1 + Math.random() * 2
+  for (let i = 0; i < 70; i++) {
+    x.strokeStyle = `rgba(35,22,10,${0.25 + Math.random() * 0.5})`
+    x.lineWidth = (1 + Math.random() * 2) * u
     x.beginPath()
-    x.moveTo(0, Math.random() * s)
-    x.quadraticCurveTo(s / 2, (Math.random() - 0.5) * 8, s, Math.random() * s)
+    const y0 = Math.random() * s
+    x.moveTo(0, y0)
+    x.quadraticCurveTo(s / 2, y0 + (Math.random() - 0.5) * 8 * u, s, Math.random() * s)
     x.stroke()
+  }
+  for (let i = 0; i < 3; i++) {
+    const kx = Math.random() * s, ky = Math.random() * s
+    for (let ring = 3; ring > 0; ring--) {
+      x.strokeStyle = `rgba(30,18,8,${0.3 + ring * 0.1})`
+      x.lineWidth = u
+      x.beginPath()
+      x.ellipse(kx, ky, ring * 2.4 * u, ring * 3.4 * u, 0, 0, Math.PI * 2)
+      x.stroke()
+    }
   }
 }
 
@@ -746,14 +809,14 @@ function box(w, h, d, color, opts = {}) {
   return m
 }
 
-function cyl(rt, rb, h, color, opts = {}, seg = 10) {
+function cyl(rt, rb, h, color, opts = {}, seg = 20) {
   const m = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, seg), mat(color, opts))
   m.castShadow = true; m.receiveShadow = true
   return m
 }
 
 function banner(color) {
-  const geo = new THREE.PlaneGeometry(2.6, 3.6, 8, 5)
+  const geo = new THREE.PlaneGeometry(2.6, 3.6, 16, 10)
   geo.translate(0, -1.8, 0)
   const m = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color, side: THREE.DoubleSide }))
   m.castShadow = true
@@ -796,6 +859,22 @@ function house(parent, x, z, ry, w = 7, d = 6, h = 4.5, roofColor = "#9a5a3c") {
   braceR.position.x = 1.35
   braceR.rotation.z = Math.PI / 4
   gr.add(braceR)
+  const braceBL = box(0.14, 1.15, 0.12, "#5d4630")
+  braceBL.position.set(-w * 0.36, 1.95, d / 2 + 0.04)
+  braceBL.rotation.z = -Math.PI / 4
+  gr.add(braceBL)
+  const braceBR = braceBL.clone()
+  braceBR.position.x = w * 0.36
+  braceBR.rotation.z = Math.PI / 4
+  gr.add(braceBR)
+  const braceBL2 = braceBL.clone()
+  braceBL2.position.set(-w * 0.36, 1.95, -d / 2 - 0.04)
+  braceBL2.rotation.y = Math.PI
+  gr.add(braceBL2)
+  const braceBR2 = braceBR.clone()
+  braceBR2.position.set(w * 0.36, 1.95, -d / 2 - 0.04)
+  braceBR2.rotation.y = Math.PI
+  gr.add(braceBR2)
   const hbeam = box(w, 0.22, 0.24, "#5d4630")
   hbeam.position.set(0, h * 0.62 + 0.35, d / 2 + 0.03)
   gr.add(hbeam)
@@ -824,6 +903,25 @@ function house(parent, x, z, ry, w = 7, d = 6, h = 4.5, roofColor = "#9a5a3c") {
     stud2.position.y = 1.74
     gr.add(stud2)
   }
+  for (let ai = 0; ai < 5; ai++) {
+    const a = Math.PI * (0.2 + (ai / 4) * 0.6)
+    const archStone = boxTex(0.34, 0.34, 0.24, "#9b9484", "stone", D_stone)
+    archStone.position.set(Math.cos(a) * 0.95, 2.62 + Math.sin(a) * 0.42, d / 2 + 0.1)
+    archStone.rotation.z = a - Math.PI / 2
+    gr.add(archStone)
+  }
+  const keystone = boxTex(0.26, 0.42, 0.26, "#a89e8c", "stone", D_stone)
+  keystone.position.set(0, 3.06, d / 2 + 0.11)
+  gr.add(keystone)
+  const stoop = boxTex(2.4, 0.12, 0.9, "#8d8a80", "stone", D_stone)
+  stoop.position.set(0, 0.06, d / 2 + 0.7)
+  gr.add(stoop)
+  for (let ci = 0; ci < 2; ci++) {
+    const crack = box(0.03, 0.9 + Math.random() * 0.5, 0.02, "#a8996f")
+    crack.position.set(ci ? w * 0.28 : -w * 0.22, 1.6 + Math.random(), d / 2 + 0.005)
+    crack.rotation.z = (Math.random() - 0.5) * 0.5
+    gr.add(crack)
+  }
   for (const wx of [-w / 3, w / 3]) {
     const frame = box(1.32, 1.22, 0.1, "#5d4630")
     frame.position.set(wx, 2.75, d / 2 + 0.04)
@@ -842,10 +940,33 @@ function house(parent, x, z, ry, w = 7, d = 6, h = 4.5, roofColor = "#9a5a3c") {
       shutter.position.set(wx + sd * 0.95, 2.75, d / 2 + 0.07)
       gr.add(shutter)
     }
+    const wbox = boxTex(1.5, 0.2, 0.28, "#7a5228", "timber", D_timber)
+    wbox.position.set(wx, 2.08, d / 2 + 0.18)
+    gr.add(wbox)
+    for (let fi = 0; fi < 3; fi++) {
+      const flower = new THREE.Mesh(new THREE.SphereGeometry(0.075, 8, 6), mat(["#e79ab5", "#f2d98a", "#c94f43"][fi]))
+      flower.position.set(wx - 0.45 + fi * 0.45, 2.24, d / 2 + 0.18)
+      flower.castShadow = true
+      gr.add(flower)
+      const stem = box(0.02, 0.1, 0.02, "#4e7a44")
+      stem.position.set(wx - 0.45 + fi * 0.45, 2.16, d / 2 + 0.18)
+      gr.add(stem)
+    }
   }
   const chim = box(0.9, 2.4, 0.9, "#8d7a6a")
   chim.position.set(w / 3, h + 1.95, -d / 4)
   gr.add(chim)
+  for (const by of [h + 1.1, h + 2.3]) {
+    const band = box(0.98, 0.14, 0.98, "#7d6a5c")
+    band.position.set(w / 3, by, -d / 4)
+    gr.add(band)
+  }
+  const chimCap = boxTex(1.3, 0.16, 1.3, "#8d8a80", "stone", D_stone)
+  chimCap.position.set(w / 3, h + 3.06, -d / 4)
+  gr.add(chimCap)
+  const soot = box(0.5, 0.1, 0.5, "#2a221a")
+  soot.position.set(w / 3, h + 3.16, -d / 4)
+  gr.add(soot)
   const pot1 = cyl(0.26, 0.3, 0.34, "#b5704a", {}, 8)
   pot1.position.set(w / 3, h + 3.3, -d / 4)
   gr.add(pot1)
@@ -856,14 +977,14 @@ function house(parent, x, z, ry, w = 7, d = 6, h = 4.5, roofColor = "#9a5a3c") {
   anims.smokeSrc = anims.smokeSrc || []
   anims.smokeSrc.push(new THREE.Vector3(x + w / 3, y + h + 3.9, z - d / 4))
   const roofR = Math.max(w, d) * 0.82
-  const roof1 = coneTex(roofR, 2.1, roofColor, "shingle", D_shingle, 5)
+  const roof1 = coneTex(roofR, 2.1, roofColor, "shingle", D_shingle, 10)
   roof1.position.y = h + 0.4 + 1.05
   roof1.rotation.y = Math.PI / 4
   gr.add(roof1)
   const eave = boxTex(w + 1.1, 0.12, d + 1.1, new THREE.Color(roofColor).offsetHSL(0, 0.04, -0.12), "timber", D_timber, {})
   eave.position.y = h + 0.4 + 0.06
   gr.add(eave)
-  const roof2 = coneTex(roofR * 0.64, 1.9, new THREE.Color(roofColor).offsetHSL(0, 0.03, -0.09), "shingle", D_shingle, 5)
+  const roof2 = coneTex(roofR * 0.64, 1.9, new THREE.Color(roofColor).offsetHSL(0, 0.03, -0.09), "shingle", D_shingle, 10)
   roof2.position.y = h + 0.4 + 2.1 + 0.85
   roof2.rotation.y = Math.PI / 4
   gr.add(roof2)
@@ -894,6 +1015,9 @@ function lantern(parent, x, z) {
     gr.add(lm)
     lightY = f ? f.sy * s * 0.82 : 2.9
   } else {
+    const lbase = boxTex(0.5, 0.3, 0.5, "#8d8a80", "stone", D_stone)
+    lbase.position.y = 0.15
+    gr.add(lbase)
     const post = cyl(0.09, 0.13, 3.2, "#4a3826")
     post.position.y = 1.6
     gr.add(post)
@@ -907,13 +1031,22 @@ function lantern(parent, x, z) {
   bulb.position.set(lightX, lightY, 0)
   gr.add(bulb)
   if (!lm) {
-    for (let pi = 0; pi < 4; pi++) {
-      const a = (pi / 4) * Math.PI * 2 + 0.4
-      const pane = new THREE.Mesh(new THREE.PlaneGeometry(0.24, 0.32), bulbMat)
+    for (let pi = 0; pi < 8; pi++) {
+      const a = (pi / 8) * Math.PI * 2 + 0.4
+      const pane = new THREE.Mesh(new THREE.PlaneGeometry(0.17, 0.32), bulbMat)
       pane.position.set(lightX + Math.cos(a) * 0.19, lightY, Math.sin(a) * 0.19)
       pane.rotation.y = Math.PI / 2 - a
       gr.add(pane)
     }
+    for (let bi = 0; bi < 4; bi++) {
+      const a = (bi / 4) * Math.PI * 2 + 0.4 + Math.PI / 8
+      const cage = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.4, 6), mat("#3a2c1c"))
+      cage.position.set(lightX + Math.cos(a) * 0.2, lightY, Math.sin(a) * 0.2)
+      gr.add(cage)
+    }
+    const cap = new THREE.Mesh(new THREE.ConeGeometry(0.26, 0.18, 8), mat("#3a2c1c"))
+    cap.position.set(lightX, lightY + 0.26, 0)
+    gr.add(cap)
   }
   const glow = new THREE.PointLight("#ffb35c", 0.5, 14, 2)
   glow.position.copy(bulb.position)
@@ -980,16 +1113,19 @@ function buildVillage(parent) {
   const arch = new THREE.Mesh(new THREE.TorusGeometry(3.1, 0.42, 8, 18, Math.PI), mat("#c9bfa4"))
   arch.position.set(0, 3.25, 6.35)
   keep.add(arch)
+  const keystone = boxTex(0.44, 0.62, 0.5, "#a89e8c", "stone", D_stone)
+  keystone.position.set(0, 6.5, 6.35)
+  keep.add(keystone)
   const cren = new THREE.Group()
-  for (let i = 0; i < 10; i++) {
-    const t = box(1.2, 1.1, 1.2, "#ded5c0")
-    t.position.set(-9 + i * 2, 9.55, -6)
+  for (let i = 0; i < 18; i++) {
+    const t = box(0.92, 1.1, 1.2, "#ded5c0")
+    t.position.set(-8.6 + i * 1.01, 9.55 + (i % 2) * 0.12, -6 + (i % 2) * 0.14)
     cren.add(t)
-    const t2 = t.clone(); t2.position.z = 6
+    const t2 = t.clone(); t2.position.z = 6 - (i % 2) * 0.14
     cren.add(t2)
   }
   keep.add(cren)
-  const roof = coneTex(9, 4.5, "#3f5f8a", "shingle", D_shingle, 4)
+  const roof = coneTex(9, 4.5, "#3f5f8a", "shingle", D_shingle, 12)
   roof.position.y = 13.5
   roof.rotation.y = Math.PI / 4
   keep.add(roof)
@@ -1006,6 +1142,16 @@ function buildVillage(parent) {
     trRim.position.set(tx, 15.1, 0)
     trRim.castShadow = true
     keep.add(trRim)
+    for (const by of [5, 10]) {
+      const band = new THREE.Mesh(new THREE.CylinderGeometry(3.06, 3.06, 0.28, 16), mat("#8d8a80"))
+      band.position.set(tx, by, 0)
+      keep.add(band)
+    }
+    for (const sy of [6.5, 9.5]) {
+      const slit = box(0.14, 1.3, 0.1, "#241c14")
+      slit.position.set(tx, sy, 2.98)
+      keep.add(slit)
+    }
     const b1 = banner("#2f5b9d")
     b1.position.set(tx - 3.1, 12.5, 0)
     b1.rotation.y = Math.PI / 2
@@ -1024,13 +1170,23 @@ function buildVillage(parent) {
   const doorR = doorL.clone()
   doorR.position.x = 0.95
   keep.add(doorR)
+  for (let bi = 0; bi < 5; bi++) {
+    const bar = box(0.12, 5.2, 0.1, "#3f3122")
+    bar.position.set(-1.6 + bi * 0.8, 2.7, 5.85)
+    keep.add(bar)
+  }
+  for (const hy of [1.2, 3.9]) {
+    const hbar = box(3.9, 0.12, 0.1, "#3f3122")
+    hbar.position.set(0, hy, 5.85)
+    keep.add(hbar)
+  }
   anims.gateDoors = [doorL, doorR]
   for (const px of [-1, 0, 1]) {
     const port = box(0.09, 5.4, 0.09, "#3f3122")
     port.position.set(px * 1.5, 2.9, 5.9)
     keep.add(port)
   }
-  for (const wx of [-6.5, 6.5]) {
+  for (const wx of [-6.5, -3.2, 3.2, 6.5]) {
     const win = box(1.3, 1.7, 0.14, "#8fb4c9", { emissive: "#3d5a70", emissiveIntensity: 0.55 })
     win.position.set(wx, 5.6, 6.25)
     keep.add(win)
@@ -1166,11 +1322,27 @@ function buildVillage(parent) {
       }
     }
     const goodsCols = i ? ["#c94f43", "#e8c25a", "#7fa85c"] : ["#e8c25a", "#c94f43", "#8fb4c9"]
-    for (let gi = 0; gi < 5; gi++) {
-      const good = new THREE.Mesh(new THREE.SphereGeometry(0.15 + (gi % 2) * 0.04, 8, 6), mat(goodsCols[gi % 3]))
-      good.position.set(-1.15 + gi * 0.58, 1.68, 0.5)
-      good.castShadow = true
-      stall.add(good)
+    for (let gi = 0; gi < 12; gi++) {
+      const gx = -1.15 + (gi % 6) * 0.46, gz = 0.5 + (gi >= 6 ? 0.4 : 0)
+      if (gi % 4 === 3) {
+        const mini = box(0.22, 0.16, 0.22, gi % 2 ? "#c98a3f" : "#b8483e")
+        mini.position.set(gx, 1.68, gz)
+        stall.add(mini)
+        const lid = box(0.24, 0.03, 0.24, "#7a5228")
+        lid.position.set(gx, 1.78, gz)
+        stall.add(lid)
+      } else if (gi % 4 === 2) {
+        const sack = new THREE.Mesh(new THREE.SphereGeometry(0.14, 8, 6), mat(gi % 2 ? "#d8bd6e" : "#c9a878"))
+        sack.scale.y = 0.8
+        sack.position.set(gx, 1.66, gz)
+        sack.castShadow = true
+        stall.add(sack)
+      } else {
+        const good = new THREE.Mesh(new THREE.SphereGeometry(0.13 + (gi % 2) * 0.04, 10, 8), mat(goodsCols[gi % 3]))
+        good.position.set(gx, 1.68, gz)
+        good.castShadow = true
+        stall.add(good)
+      }
     }
     }
     stall.position.set(i ? 8 : -8, 0, 20)
@@ -1190,14 +1362,22 @@ function buildVillage(parent) {
   const panel = box(3, 1.6, 0.14, "#7a5c3a")
   panel.position.y = 2
   board.add(panel)
-  const paper = box(0.7, 0.9, 0.05, "#f3e8cc")
-  paper.position.set(-0.6, 2, 0.1)
-  paper.rotation.z = 0.08
-  board.add(paper)
-  const paper2 = paper.clone()
-  paper2.position.set(0.5, 1.9, 0.1)
-  paper2.rotation.z = -0.1
-  board.add(paper2)
+  for (let pi = 0; pi < 5; pi++) {
+    const paper = box(0.7, 0.9, 0.05, "#f3e8cc")
+    paper.position.set(-0.9 + pi * 0.45, 2 + (pi % 2 ? -0.1 : 0.05), 0.1)
+    paper.rotation.z = (pi % 2 ? -1 : 1) * (0.06 + pi * 0.02)
+    board.add(paper)
+    const pin = box(0.05, 0.05, 0.03, "#8a6a44")
+    pin.position.set(paper.position.x, paper.position.y + 0.38, 0.14)
+    board.add(pin)
+  }
+  for (const nx of [-1.35, 1.35]) {
+    for (const ny of [1.4, 2.6]) {
+      const nail = box(0.04, 0.04, 0.06, "#c9a24a")
+      nail.position.set(nx, ny, 0.1)
+      board.add(nail)
+    }
+  }
   board.position.set(4.5, 0, 27)
   board.rotation.y = -0.4
   v.add(board)
@@ -1217,7 +1397,7 @@ function buildVillage(parent) {
   const sb = boxTex(7, 3.4, 5.5, "#d9c9a4", "plaster", D_plaster)
   sb.position.y = 1.7
   stable.add(sb)
-  const sr = coneTex(4.6, 2.4, "#7c5637", "shingle", D_shingle, 4)
+  const sr = coneTex(4.6, 2.4, "#7c5637", "shingle", D_shingle, 10)
   sr.position.y = 4.6
   sr.rotation.y = Math.PI / 4
   stable.add(sr)
@@ -1265,7 +1445,7 @@ function buildVillage(parent) {
 
   const gseeds = []
   let g3 = 0
-  while (gseeds.length < 320 && g3++ < 6000) {
+  while (gseeds.length < 480 && g3++ < 9000) {
     const a = Math.random() * Math.PI * 2
     const r = 26 + Math.random() * 32
     const x = Math.cos(a) * r, z = Math.sin(a) * r + 4
@@ -1361,22 +1541,23 @@ function collectGrass(count, zone) {
 }
 function grassTexture() {
   const c = document.createElement("canvas")
-  c.width = c.height = 128
+  c.width = c.height = 256
   const x = c.getContext("2d")
-  const n = 5 + Math.floor(Math.random() * 3)
+  const k = 2
+  const n = 12 + Math.floor(Math.random() * 5)
   for (let i = 0; i < n; i++) {
-    const bx = 14 + (i / (n - 1)) * 100 + (Math.random() - 0.5) * 12
-    const bend = (Math.random() - 0.5) * 44
-    const w = 4.5 + Math.random() * 3.5
-    const grad = x.createLinearGradient(0, 128, 0, 8)
+    const bx = 14 * k + (i / (n - 1)) * 100 * k + (Math.random() - 0.5) * 12 * k
+    const bend = (Math.random() - 0.5) * 44 * k
+    const w = (4.5 + Math.random() * 3.5) * k
+    const grad = x.createLinearGradient(0, 128 * k, 0, 8 * k)
     grad.addColorStop(0, "#2e5a24")
     grad.addColorStop(0.55, "#4e8a34")
     grad.addColorStop(1, "#a8c86a")
     x.fillStyle = grad
     x.beginPath()
-    x.moveTo(bx - w, 128)
-    x.quadraticCurveTo(bx - w * 0.4 + bend * 0.4, 64, bx + bend, 6 + Math.random() * 14)
-    x.quadraticCurveTo(bx + w * 0.4 + bend * 0.4, 64, bx + w, 128)
+    x.moveTo(bx - w, 128 * k)
+    x.quadraticCurveTo(bx - w * 0.4 + bend * 0.4, 64 * k, bx + bend, (6 + Math.random() * 14) * k)
+    x.quadraticCurveTo(bx + w * 0.4 + bend * 0.4, 64 * k, bx + w, 128 * k)
     x.closePath()
     x.fill()
   }
@@ -1466,24 +1647,38 @@ function heroTree(parent, x, z, name) {
     g.add(hm)
   } else {
   const s = 1 + Math.random() * 0.35
-  const trunk = cyl(0.34, 0.54, 2.7, "#5f4128", {}, 9)
+  const trunk = cyl(0.34, 0.54, 2.7, "#5f4128", {}, 14)
   trunk.position.y = 1.35
   g.add(trunk)
-  const trunk2 = cyl(0.22, 0.34, 2.2, "#6b4a30", {}, 8)
+  const trunk2 = cyl(0.22, 0.34, 2.2, "#6b4a30", {}, 12)
   trunk2.position.y = 3.6
   g.add(trunk2)
-  const f1 = new THREE.Mesh(new THREE.SphereGeometry(2.7, 10, 8).scale(1, 0.85, 1), (() => { const m = mat("#558a4e"); windify(m, 0.6); return m })())
+  const f1 = new THREE.Mesh(new THREE.SphereGeometry(2.7, 16, 12).scale(1, 0.85, 1), (() => { const m = mat("#558a4e"); windify(m, 0.6); return m })())
   f1.position.y = 5.7
   g.add(f1)
-  const f2 = new THREE.Mesh(new THREE.SphereGeometry(1.8, 10, 8), (() => { const m = mat("#6da161"); windify(m, 0.8); return m })())
+  const f2 = new THREE.Mesh(new THREE.SphereGeometry(1.8, 14, 10), (() => { const m = mat("#6da161"); windify(m, 0.8); return m })())
   f2.position.set(0, 7.9, 0)
   g.add(f2)
-  const f3 = new THREE.Mesh(new THREE.SphereGeometry(1.2, 9, 7), (() => { const m = mat("#7dae6a"); windify(m, 0.95); return m })())
+  const f3 = new THREE.Mesh(new THREE.SphereGeometry(1.2, 12, 9), (() => { const m = mat("#7dae6a"); windify(m, 0.95); return m })())
   f3.position.set(0, 8.9, 0)
   g.add(f3)
-  const f4 = new THREE.Mesh(new THREE.SphereGeometry(1.1, 9, 7), (() => { const m = mat("#558a4e"); windify(m, 0.9); return m })())
+  const f4 = new THREE.Mesh(new THREE.SphereGeometry(1.1, 12, 9), (() => { const m = mat("#558a4e"); windify(m, 0.9); return m })())
   f4.position.set(0, 10.1, 0)
   g.add(f4)
+  for (let k = 0; k < 6; k++) {
+    const a = (k / 6) * Math.PI * 2
+    const r = k < 3 ? 2.1 : 1.6
+    const fs = new THREE.Mesh(new THREE.SphereGeometry(1.15, 12, 9), (() => { const m = mat(k % 2 ? "#5f9355" : "#7dae6a"); windify(m, 0.85); return m })())
+    fs.position.set(Math.cos(a) * r, 6.2 + (k % 3) * 1.4, Math.sin(a) * r)
+    g.add(fs)
+  }
+  for (let k = 0; k < 4; k++) {
+    const a = (k / 4) * Math.PI * 2 + 0.4
+    const stub = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.13, 1.1, 6).translate(0, 0.55, 0).rotateZ(0.95), mat("#544026"))
+    stub.position.set(Math.cos(a) * 0.24, 2.1 + (k % 2) * 0.6, Math.sin(a) * 0.24)
+    stub.rotation.y = -a
+    g.add(stub)
+  }
   g.scale.setScalar(s)
   }
   g.position.set(x, heightAt(x, z), z)
@@ -1497,57 +1692,83 @@ function buildWoods(parent) {
   const oakSpots = scatter(120, "woods")
   if (!plantTreesMerged(parent, oakSpots, "oak", 10)) {
   const trunks = oakSpots.map(p => ({ ...p, y: p.y, s: 0.9 + Math.random() * 0.5 }))
-  instanced(parent, new THREE.CylinderGeometry(0.34, 0.54, 2.7, 9).translate(0, 1.35, 0), mat("#5f4128"), trunks)
-  instanced(parent, new THREE.CylinderGeometry(0.22, 0.34, 2.2, 8).translate(0, 3.6, 0), mat("#6b4a30"), trunks)
+  instanced(parent, new THREE.CylinderGeometry(0.34, 0.54, 2.7, 14).translate(0, 1.35, 0), mat("#5f4128"), trunks)
+  instanced(parent, new THREE.CylinderGeometry(0.22, 0.34, 2.2, 12).translate(0, 3.6, 0), mat("#6b4a30"), trunks)
   const flareGeo = new THREE.ConeGeometry(0.3, 1.3, 7).translate(0, 0.65, 0).rotateZ(0.55)
   const flares = []
   for (const t of trunks) {
-    for (let k = 0; k < 5; k++) {
-      const a = (k / 5) * Math.PI * 2 + t.x * 0.7 + t.z * 1.3
+    for (let k = 0; k < 10; k++) {
+      const a = (k / 10) * Math.PI * 2 + t.x * 0.7 + t.z * 1.3
       flares.push({ x: t.x + Math.cos(a) * 0.34 * t.s, y: t.y - 0.1, z: t.z + Math.sin(a) * 0.34 * t.s, ry: Math.PI - a, s: t.s * (0.85 + Math.random() * 0.5) })
     }
   }
   instanced(parent, flareGeo, mat("#544026"), flares)
   const stubGeo = new THREE.CylinderGeometry(0.08, 0.14, 1.2, 6).translate(0, 0.6, 0).rotateZ(0.95)
-  const stubs = trunks.map(t => {
-    const a = Math.random() * Math.PI * 2
-    return { x: t.x + Math.cos(a) * 0.24 * t.s, y: t.y + 2.55 * t.s, z: t.z + Math.sin(a) * 0.24 * t.s, ry: Math.PI - a, s: t.s * (0.9 + Math.random() * 0.5) }
-  })
+  const stubs = []
+  for (const t of trunks) {
+    for (let k = 0; k < 3; k++) {
+      const a = Math.random() * Math.PI * 2
+      stubs.push({ x: t.x + Math.cos(a) * 0.24 * t.s, y: t.y + (1.8 + Math.random() * 0.8) * t.s, z: t.z + Math.sin(a) * 0.24 * t.s, ry: Math.PI - a, s: t.s * (0.9 + Math.random() * 0.5) })
+    }
+  }
   instanced(parent, stubGeo, mat("#544026"), stubs)
-  instanced(parent, new THREE.SphereGeometry(2.7, 10, 8).scale(1, 0.85, 1).translate(0, 5.7, 0),
+  instanced(parent, new THREE.SphereGeometry(2.7, 16, 12).scale(1, 0.85, 1).translate(0, 5.7, 0),
     (() => { const m = mat("#558a4e"); windify(m, 0.6); return m })(),
     trunks.map(t => ({ ...t, s: t.s * (0.9 + Math.random() * 0.4) })))
-  instanced(parent, new THREE.SphereGeometry(1.8, 10, 8).translate(0, 7.9, 0),
+  instanced(parent, new THREE.SphereGeometry(1.8, 14, 10).translate(0, 7.9, 0),
     (() => { const m = mat("#6da161"); windify(m, 0.8); return m })(),
     trunks.map(t => ({ x: t.x + (Math.random() - 0.5) * 1.4, y: t.y, z: t.z + (Math.random() - 0.5) * 1.4, s: t.s * (0.6 + Math.random() * 0.3) })), { shadow: false })
-  instanced(parent, new THREE.SphereGeometry(1.2, 9, 7).translate(0, 8.9, 0),
+  instanced(parent, new THREE.SphereGeometry(1.2, 12, 9).translate(0, 8.9, 0),
     (() => { const m = mat("#7dae6a"); windify(m, 0.95); return m })(),
     trunks.map(t => ({ x: t.x + (Math.random() - 0.5) * 1.1, y: t.y, z: t.z + (Math.random() - 0.5) * 1.1, s: t.s * (0.5 + Math.random() * 0.25) })), { shadow: false })
-  instanced(parent, new THREE.SphereGeometry(1.1, 9, 7).translate(0, 10.1, 0),
+  instanced(parent, new THREE.SphereGeometry(1.1, 12, 9).translate(0, 10.1, 0),
     (() => { const m = mat("#558a4e"); windify(m, 0.9); return m })(),
     trunks.map(t => ({ x: t.x + (Math.random() - 0.5) * 0.8, y: t.y, z: t.z + (Math.random() - 0.5) * 0.8, s: t.s * (0.45 + Math.random() * 0.2) })), { shadow: false })
+  const satGeoA = new THREE.SphereGeometry(1.05, 12, 9).translate(0, 6.4, 0)
+  const satMatA = (() => { const m = mat("#5f9355"); windify(m, 0.85); return m })()
+  const satGeoB = new THREE.SphereGeometry(0.85, 12, 9).translate(0, 8.6, 0)
+  const satMatB = (() => { const m = mat("#6da161"); windify(m, 0.9); return m })()
+  const sats = []
+  for (const t of trunks) {
+    for (let k = 0; k < 6; k++) {
+      const a = (k / 6) * Math.PI * 2 + t.x * 0.9 + t.z * 0.5
+      const r = k < 3 ? 1.55 : 1.15
+      sats.push({ x: t.x + Math.cos(a) * r * t.s, y: t.y, z: t.z + Math.sin(a) * r * t.s, s: t.s * (0.5 + Math.random() * 0.3) })
+    }
+  }
+  instanced(parent, satGeoA, satMatA, sats.filter((_, i) => i % 2 === 0), { shadow: false })
+  instanced(parent, satGeoB, satMatB, sats.filter((_, i) => i % 2 === 1), { shadow: false })
   }
 
   const blSpots = scatter(75, "woods")
   if (!plantTreesMerged(parent, blSpots, "blossom", 9, 0.9, 1.5)) {
   const bl = blSpots.map(p => ({ ...p, s: 0.9 + Math.random() * 0.6 }))
-  instanced(parent, new THREE.CylinderGeometry(0.22, 0.42, 3.9, 8).translate(0, 1.95, 0), mat("#5f4530"), bl)
-  instanced(parent, new THREE.SphereGeometry(2.4, 10, 8).scale(1, 0.9, 1).translate(0, 4.9, 0),
+  instanced(parent, new THREE.CylinderGeometry(0.22, 0.42, 3.9, 12).translate(0, 1.95, 0), mat("#5f4530"), bl)
+  instanced(parent, new THREE.SphereGeometry(2.4, 16, 12).scale(1, 0.9, 1).translate(0, 4.9, 0),
     (() => { const m = mat("#e79ab5"); windify(m, 0.75); return m })(),
     bl.map(t => ({ ...t, s: t.s * (0.9 + Math.random() * 0.4) })))
-  instanced(parent, new THREE.SphereGeometry(1.55, 10, 8).translate(0, 6.6, 0),
+  instanced(parent, new THREE.SphereGeometry(1.55, 14, 10).translate(0, 6.6, 0),
     (() => { const m = mat("#f2b7cf"); windify(m, 0.9); return m })(),
     bl.map(t => ({ x: t.x + (Math.random() - 0.5) * 1.1, y: t.y, z: t.z + (Math.random() - 0.5) * 1.1, s: t.s * (0.6 + Math.random() * 0.3) })), { shadow: false })
-  instanced(parent, new THREE.SphereGeometry(1.0, 9, 7).translate(0, 7.7, 0),
+  instanced(parent, new THREE.SphereGeometry(1.0, 12, 9).translate(0, 7.7, 0),
     (() => { const m = mat("#f7b8d2"); windify(m, 0.95); return m })(),
     bl.map(t => ({ x: t.x + (Math.random() - 0.5) * 0.9, y: t.y, z: t.z + (Math.random() - 0.5) * 0.9, s: t.s * (0.5 + Math.random() * 0.25) })), { shadow: false })
-  instanced(parent, new THREE.SphereGeometry(0.95, 9, 7).translate(0, 8.4, 0),
+  instanced(parent, new THREE.SphereGeometry(0.95, 12, 9).translate(0, 8.4, 0),
     (() => { const m = mat("#e79ab5"); windify(m, 0.85); return m })(),
     bl.map(t => ({ x: t.x + (Math.random() - 0.5) * 0.7, y: t.y, z: t.z + (Math.random() - 0.5) * 0.7, s: t.s * (0.45 + Math.random() * 0.2) })), { shadow: false })
+  const blSats = []
+  for (const t of bl) {
+    for (let k = 0; k < 4; k++) {
+      const a = (k / 4) * Math.PI * 2 + t.x * 0.6 + t.z * 1.1
+      blSats.push({ x: t.x + Math.cos(a) * 1.35 * t.s, y: t.y, z: t.z + Math.sin(a) * 1.35 * t.s, s: t.s * (0.5 + Math.random() * 0.28) })
+    }
+  }
+  instanced(parent, new THREE.SphereGeometry(1.15, 12, 9).translate(0, 5.9, 0),
+    (() => { const m = mat("#ee9fc0"); windify(m, 0.8); return m })(), blSats, { shadow: false })
   const bpetals = []
   for (const t of bl) {
-    for (let k = 0; k < 10; k++) {
-      const a = (k / 10) * Math.PI * 2 + t.x * 0.31 + t.z * 0.17
+    for (let k = 0; k < 24; k++) {
+      const a = (k / 24) * Math.PI * 2 + t.x * 0.31 + t.z * 0.17
       bpetals.push({ x: t.x + Math.cos(a) * 2.25 * t.s, y: t.y + 5.0 * t.s + (Math.random() - 0.5) * 0.8, z: t.z + Math.sin(a) * 2.25 * t.s, s: t.s * (0.7 + Math.random() * 0.7) })
     }
   }
@@ -1559,9 +1780,9 @@ function buildWoods(parent) {
   heroSpots.forEach((p, i) => {
     heroTree(parent, p.x, p.z, TREE_NAMES[i % TREE_NAMES.length])
   })
-  collectGrass(22000, "woods")
+  collectGrass(32000, "woods")
 
-  const shroomSpots = scatter(60, "woods", 45, 190)
+  const shroomSpots = scatter(100, "woods", 45, 190)
   const shroomM = ASSETS && ASSETS.model("mushroom")
   if (shroomM) {
     const mf = gltfFit("mushroom")
@@ -1575,8 +1796,9 @@ function buildWoods(parent) {
       parent.add(m)
     }
   } else {
-    instanced(parent, new THREE.CylinderGeometry(0.18, 0.25, 0.55, 6).translate(0, 0.27, 0), mat("#f0e6d2"), shroomSpots.map(s => ({ ...s, s: 0.8 + Math.random() })))
-    instanced(parent, new THREE.SphereGeometry(0.5, 8, 6, 0, Math.PI * 2, 0, Math.PI / 2).translate(0, 0.55, 0), mat("#c94f43"), shroomSpots.map(s => ({ ...s, s: 0.8 + Math.random() })))
+    instanced(parent, new THREE.CylinderGeometry(0.18, 0.25, 0.55, 10).translate(0, 0.27, 0), mat("#f0e6d2"), shroomSpots.map(s => ({ ...s, s: 0.8 + Math.random() })))
+    instanced(parent, new THREE.SphereGeometry(0.5, 14, 10, 0, Math.PI * 2, 0, Math.PI / 2).translate(0, 0.55, 0), mat("#c94f43"), shroomSpots.map(s => ({ ...s, s: 0.8 + Math.random() })))
+    instanced(parent, new THREE.ConeGeometry(0.42, 0.16, 12).rotateX(Math.PI).translate(0, 0.56, 0), mat("#e8d8c0"), shroomSpots.map(s => ({ ...s, s: 0.8 + Math.random() })), { shadow: false })
   }
 
   const pond = SPECIALS.pond
@@ -1599,7 +1821,7 @@ function buildWoods(parent) {
   anims.lilies = lilies
 
   const ff = []
-  for (let i = 0; i < 70; i++) {
+  for (let i = 0; i < 110; i++) {
     const a = Math.random() * Math.PI * 2, r = 5 + Math.random() * 10
     ff.push(new THREE.Vector3(pond.x + Math.cos(a) * r, heightAt(pond.x, pond.z) + 0.6 + Math.random() * 2.4, pond.z + Math.sin(a) * r))
   }
@@ -1609,7 +1831,7 @@ function buildWoods(parent) {
   anims.fireflies.userData.base = ff
   parent.add(anims.fireflies)
 
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < 16; i++) {
     const b = new THREE.Group()
     const wgeo = new THREE.PlaneGeometry(0.5, 0.35)
     const wm = new THREE.MeshLambertMaterial({ color: i % 2 ? "#e8b3d0" : "#f2d98a", side: THREE.DoubleSide })
@@ -1624,14 +1846,14 @@ function buildWoods(parent) {
 }
 
 function buildPlains(parent) {
-  const wheat = scatter(3600, "plains", 47, 180)
+  const wheat = scatter(4200, "plains", 47, 180)
   const wgeo = new THREE.PlaneGeometry(0.14, 1.15, 1, 2).translate(0, 0.575, 0)
   const wmat = (() => { const m = mat("#d3b45c", { side: THREE.DoubleSide }); windify(m, 1.6); return m })()
   instanced(parent, wgeo, wmat, wheat.map(p => ({ ...p, s: 0.8 + Math.random() * 0.7 })), { shadow: false })
 
-  const poppies = scatter(240, "plains", 47, 180)
+  const poppies = scatter(420, "plains", 47, 180)
   instanced(parent, new THREE.SphereGeometry(0.16, 6, 5).translate(0, 0.55, 0), mat("#c2432f"), poppies.map(p => ({ ...p, s: 0.9 + Math.random() * 0.5 })), { shadow: false })
-  collectGrass(26000, "plains")
+  collectGrass(38000, "plains")
 
   const fenceM = ASSETS && ASSETS.model("fence")
   if (fenceM) {
@@ -1663,18 +1885,60 @@ function buildPlains(parent) {
   const wm = SPECIALS.windmill
   const wy = heightAt(wm.x, wm.z)
   const mill = new THREE.Group()
-  const tower = cyl(2.6, 3.6, 9, "#e8dcc0", {}, 10)
+  const tower = cyl(2.6, 3.6, 9, "#e8dcc0", {}, 16)
   tower.position.y = 4.5
   mill.add(tower)
-  const mroof = new THREE.Mesh(new THREE.ConeGeometry(3.4, 2.4, 10), mat("#7c5637"))
+  for (const by of [2.2, 4.6, 7]) {
+    const band = new THREE.Mesh(new THREE.CylinderGeometry(2.72 - by * 0.03, 2.78 - by * 0.03, 0.22, 16), mat("#b8a98a"))
+    band.position.y = by
+    mill.add(band)
+  }
+  const wdoor = boxTex(1.1, 1.9, 0.12, "#6d4a2f", "timber", D_timber)
+  wdoor.position.set(0, 1.15, 3.42)
+  mill.add(wdoor)
+  for (const wx of [-1.35, 1.35]) {
+    const mw = box(0.7, 0.9, 0.12, "#8fb4c9", { emissive: "#3d5a70", emissiveIntensity: 0.4 })
+    mw.position.set(wx, 4.4, 3.05)
+    mill.add(mw)
+    const msill = box(0.86, 0.1, 0.2, "#8d8a80")
+    msill.position.set(wx, 3.9, 3.05)
+    mill.add(msill)
+  }
+  const mroof = new THREE.Mesh(new THREE.ConeGeometry(3.4, 2.4, 16), mat("#7c5637"))
   mroof.position.y = 10.2
   mill.add(mroof)
+  const finialM = new THREE.Mesh(new THREE.SphereGeometry(0.16, 10, 8), mat("#c9a53f"))
+  finialM.position.y = 11.5
+  mill.add(finialM)
+  const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.5, 12).rotateX(Math.PI / 2), mat("#5d4630"))
+  hub.position.set(0, 8.6, 3.4)
+  mill.add(hub)
   const blades = new THREE.Group()
+  const clothM = new THREE.MeshLambertMaterial({ color: "#e8ddc2", side: THREE.DoubleSide })
   for (let i = 0; i < 4; i++) {
-    const bl = box(0.35, 7.5, 0.12, "#c9b78e")
-    bl.position.y = 3.75
     const arm = new THREE.Group()
-    arm.add(bl)
+    const spine = box(0.1, 7.5, 0.1, "#5d4630")
+    spine.position.y = 3.75
+    arm.add(spine)
+    for (let ci = 0; ci < 6; ci++) {
+      const cross = box(0.62, 0.09, 0.06, "#8a6a44")
+      cross.position.set(0.22, 0.75 + ci * 1.2, 0.02)
+      arm.add(cross)
+      const cross2 = cross.clone()
+      cross2.position.x = -0.22
+      arm.add(cross2)
+    }
+    const cloth = new THREE.Mesh(new THREE.PlaneGeometry(0.55, 6.2), clothM)
+    cloth.position.set(0.05, 3.75, 0.08)
+    arm.add(cloth)
+    const brace = box(0.05, 3.4, 0.05, "#5d4630")
+    brace.position.set(0.24, 3.7, 0.05)
+    brace.rotation.z = -0.32
+    arm.add(brace)
+    const brace2 = brace.clone()
+    brace2.position.x = -0.24
+    brace2.rotation.z = 0.32
+    arm.add(brace2)
     arm.rotation.z = (i / 4) * Math.PI * 2
     blades.add(arm)
   }
@@ -1686,7 +1950,7 @@ function buildPlains(parent) {
   parent.add(mill)
 
   for (let i = 0; i < 7; i++) {
-    const hay = new THREE.Mesh(new THREE.CylinderGeometry(1.4, 1.4, 1.1, 10), mat("#d8bd6e"))
+    const hay = new THREE.Mesh(new THREE.CylinderGeometry(1.4, 1.4, 1.1, 14), mat("#d8bd6e"))
     const p = scatter(1, "plains", 50, 150, { x: 106, z: -38 }, 56)[0]
     if (!p) continue
     hay.position.set(p.x, p.y + 0.55, p.z)
@@ -1694,72 +1958,104 @@ function buildPlains(parent) {
     hay.rotation.y = Math.random() * Math.PI
     hay.castShadow = true
     parent.add(hay)
+    for (const hbx of [-0.38, 0.38]) {
+      const hband = new THREE.Mesh(new THREE.TorusGeometry(1.42, 0.045, 6, 18), mat("#b89a4e"))
+      hband.position.set(p.x, p.y + 0.55, p.z)
+      hband.rotation.y = hay.rotation.y
+      hband.rotation.x = Math.PI / 2
+      hband.position.x += Math.cos(hay.rotation.y + Math.PI / 2) * hbx * -1
+      hband.position.z += Math.sin(hay.rotation.y + Math.PI / 2) * hbx * -1
+      parent.add(hband)
+    }
     registerDestroyable(parent, hay, { kind: "hay", label: "Hay Bale", icon: "🌾", hp: 1, rx: 1.4, rz: 1.4 })
   }
 }
 
 function buildHighlands(parent) {
-  const lav = scatter(2400, "highlands", 56, 190)
+  const lav = scatter(3000, "highlands", 56, 190)
   const lgeo = new THREE.SphereGeometry(0.3, 6, 5).translate(0, 0.42, 0)
   const lmat = (() => { const m = mat("#9a7fc9"); windify(m, 1.1); return m })()
   instanced(parent, lgeo, lmat, lav.map(p => ({ ...p, s: 0.9 + Math.random() * 0.9 })), { shadow: false })
 
   const willowT = scatter(36, "highlands").map(p => ({ ...p, s: 1 + Math.random() * 0.4 }))
-  instanced(parent, new THREE.CylinderGeometry(0.22, 0.5, 6.6, 8).translate(0, 3.3, 0), mat("#5f4630"), willowT)
-  const wstubs = willowT.map(t => {
-    const a = Math.random() * Math.PI * 2
-    return { x: t.x + Math.cos(a) * 0.3 * t.s, y: t.y + 3.5 * t.s, z: t.z + Math.sin(a) * 0.3 * t.s, ry: Math.PI - a, s: t.s * (1 + Math.random() * 0.6) }
-  })
+  instanced(parent, new THREE.CylinderGeometry(0.22, 0.5, 6.6, 14).translate(0, 3.3, 0), mat("#5f4630"), willowT)
+  const wstubs = []
+  for (const t of willowT) {
+    for (let k = 0; k < 2; k++) {
+      const a = Math.random() * Math.PI * 2
+      wstubs.push({ x: t.x + Math.cos(a) * 0.3 * t.s, y: t.y + (3.2 + k * 0.7) * t.s, z: t.z + Math.sin(a) * 0.3 * t.s, ry: Math.PI - a, s: t.s * (1 + Math.random() * 0.6) })
+    }
+  }
   instanced(parent, new THREE.CylinderGeometry(0.09, 0.16, 1.7, 6).translate(0, 0.85, 0).rotateZ(0.9), mat("#54402a"), wstubs)
-  instanced(parent, new THREE.SphereGeometry(3.1, 11, 8).scale(1, 1.05, 1).translate(0, 7.6, 0),
+  instanced(parent, new THREE.SphereGeometry(3.1, 16, 12).scale(1, 1.05, 1).translate(0, 7.6, 0),
     (() => { const m = mat("#7ea369"); windify(m, 0.6); return m })(),
     willowT.map(t => ({ ...t, s: t.s * (0.95 + Math.random() * 0.4) })))
-  instanced(parent, new THREE.SphereGeometry(2.1, 10, 7).translate(0, 8.8, 0),
+  instanced(parent, new THREE.SphereGeometry(2.1, 14, 10).translate(0, 8.8, 0),
     (() => { const m = mat("#8fb374"); windify(m, 0.75); return m })(),
     willowT.map(t => ({ x: t.x + (Math.random() - 0.5) * 1.2, y: t.y, z: t.z + (Math.random() - 0.5) * 1.2, s: t.s * (0.6 + Math.random() * 0.3) })), { shadow: false })
-  instanced(parent, new THREE.SphereGeometry(1.4, 9, 7).translate(0, 10.2, 0),
+  instanced(parent, new THREE.SphereGeometry(1.4, 12, 9).translate(0, 10.2, 0),
     (() => { const m = mat("#9cc083"); windify(m, 0.85); return m })(),
     willowT.map(t => ({ x: t.x + (Math.random() - 0.5) * 0.9, y: t.y, z: t.z + (Math.random() - 0.5) * 0.9, s: t.s * (0.5 + Math.random() * 0.25) })), { shadow: false })
-  instanced(parent, new THREE.ConeGeometry(3.1, 4.4, 12, 1, true).rotateX(Math.PI).translate(0, 4.1, 0),
+  instanced(parent, new THREE.SphereGeometry(1.7, 12, 9).translate(0, 9.5, 0),
+    (() => { const m = mat("#96bb7c"); windify(m, 0.8); return m })(),
+    willowT.map(t => ({ x: t.x + (Math.random() - 0.5) * 1.6, y: t.y, z: t.z + (Math.random() - 0.5) * 1.6, s: t.s * (0.55 + Math.random() * 0.3) })), { shadow: false })
+  instanced(parent, new THREE.ConeGeometry(3.1, 4.4, 20, 1, true).rotateX(Math.PI).translate(0, 4.1, 0),
     (() => { const m = mat("#6b9159", { side: THREE.DoubleSide }); windify(m, 0.55); return m })(),
     willowT.map(t => ({ ...t, ry: t.x * 0.13 + t.z * 0.29, s: t.s * (0.95 + Math.random() * 0.35), sy: t.s * (0.9 + Math.random() * 0.3) })), { shadow: false })
-  instanced(parent, new THREE.ConeGeometry(2.3, 3.4, 12, 1, true).rotateX(Math.PI).translate(0, 3.9, 0),
+  instanced(parent, new THREE.ConeGeometry(2.3, 3.4, 20, 1, true).rotateX(Math.PI).translate(0, 3.9, 0),
     (() => { const m = mat("#7ea369", { side: THREE.DoubleSide }); windify(m, 0.65); return m })(),
     willowT.map(t => ({ x: t.x + (Math.random() - 0.5) * 0.5, y: t.y, z: t.z + (Math.random() - 0.5) * 0.5, ry: t.z * 0.21 + t.x * 0.17, s: t.s * (0.8 + Math.random() * 0.3), sy: t.s * (0.85 + Math.random() * 0.3) })), { shadow: false })
-  instanced(parent, new THREE.ConeGeometry(1.5, 2.6, 12, 1, true).rotateX(Math.PI).translate(0, 3.6, 0),
+  instanced(parent, new THREE.ConeGeometry(1.5, 2.6, 20, 1, true).rotateX(Math.PI).translate(0, 3.6, 0),
     (() => { const m = mat("#8fb374", { side: THREE.DoubleSide }); windify(m, 0.75); return m })(),
     willowT.map(t => ({ x: t.x + (Math.random() - 0.5) * 0.4, y: t.y, z: t.z + (Math.random() - 0.5) * 0.4, ry: t.x * 0.14 + t.z * 0.31, s: t.s * (0.8 + Math.random() * 0.3), sy: t.s * (0.85 + Math.random() * 0.3) })), { shadow: false })
 
   const pineSpots = scatter(90, "highlands", 63, 190)
   if (!plantTreesMerged(parent, pineSpots, "pine", 11.5, 1, 1.7)) {
   const pines = pineSpots.map(p => ({ ...p, s: 1 + Math.random() * 0.7 }))
-  instanced(parent, new THREE.CylinderGeometry(0.22, 0.38, 3.4, 8).translate(0, 1.7, 0), mat("#4d3a2a"), pines)
+  instanced(parent, new THREE.CylinderGeometry(0.22, 0.38, 3.4, 12).translate(0, 1.7, 0), mat("#4d3a2a"), pines)
   const pflares = []
   for (const t of pines) {
-    for (let k = 0; k < 5; k++) {
-      const a = (k / 5) * Math.PI * 2 + t.x * 0.9 + t.z * 1.1
+    for (let k = 0; k < 8; k++) {
+      const a = (k / 8) * Math.PI * 2 + t.x * 0.9 + t.z * 1.1
       pflares.push({ x: t.x + Math.cos(a) * 0.32 * t.s, y: t.y - 0.1, z: t.z + Math.sin(a) * 0.32 * t.s, ry: Math.PI - a, s: t.s * (0.8 + Math.random() * 0.5) })
     }
   }
   instanced(parent, new THREE.ConeGeometry(0.26, 1.2, 7).translate(0, 0.6, 0).rotateZ(0.5), mat("#4a3a2c"), pflares)
-  instanced(parent, new THREE.ConeGeometry(2.0, 4.4, 10).translate(0, 4.7, 0),
+  const pstubs = []
+  for (const t of pines) {
+    for (let k = 0; k < 3; k++) {
+      const a = Math.random() * Math.PI * 2
+      pstubs.push({ x: t.x + Math.cos(a) * 0.22 * t.s, y: t.y + (1.4 + Math.random() * 1.2) * t.s, z: t.z + Math.sin(a) * 0.22 * t.s, ry: Math.PI - a, s: t.s * (0.8 + Math.random() * 0.5) })
+    }
+  }
+  instanced(parent, new THREE.CylinderGeometry(0.06, 0.1, 0.9, 6).translate(0, 0.45, 0).rotateZ(0.9), mat("#4a3a2c"), pstubs)
+  instanced(parent, new THREE.ConeGeometry(2.0, 4.4, 16).translate(0, 4.7, 0),
     (() => { const m = mat("#3c6245"); windify(m, 0.5); return m })(),
     pines.map(t => ({ ...t, ry: t.x * 0.05 + t.z * 0.09 })))
-  instanced(parent, new THREE.ConeGeometry(1.6, 3.8, 10).translate(0, 6.5, 0),
+  instanced(parent, new THREE.ConeGeometry(1.6, 3.8, 16).translate(0, 6.5, 0),
     (() => { const m = mat("#456e50"); windify(m, 0.55); return m })(),
     pines.map(t => ({ ...t, ry: t.x * 0.05 + t.z * 0.09 + 0.6 })), { shadow: false })
-  instanced(parent, new THREE.ConeGeometry(1.45, 3.6, 10).translate(0, 8.1, 0),
+  instanced(parent, new THREE.ConeGeometry(1.45, 3.6, 16).translate(0, 8.1, 0),
     (() => { const m = mat("#4a7452"); windify(m, 0.6); return m })(),
     pines.map(t => ({ ...t, ry: t.x * 0.05 + t.z * 0.09 + 1.1 })), { shadow: false })
-  instanced(parent, new THREE.ConeGeometry(0.95, 2.8, 10).translate(0, 10.3, 0),
+  instanced(parent, new THREE.ConeGeometry(0.95, 2.8, 16).translate(0, 10.3, 0),
     (() => { const m = mat("#568260"); windify(m, 0.7); return m })(),
     pines.map(t => ({ ...t, ry: t.x * 0.05 + t.z * 0.09 + 1.9 })), { shadow: false })
   instanced(parent, new THREE.ConeGeometry(0.48, 0.9, 10).translate(0, 11.6, 0),
     (() => { const m = mat("#eef2ec"); windify(m, 0.5); return m })(),
     pines.map(t => ({ ...t, ry: t.x * 0.05 + t.z * 0.09 + 2.5 })), { shadow: false })
-  instanced(parent, new THREE.ConeGeometry(0.6, 1.6, 8).translate(0, 10.9, 0),
+  instanced(parent, new THREE.ConeGeometry(0.6, 1.6, 10).translate(0, 10.9, 0),
     (() => { const m = mat("#eef2ec"); windify(m, 0.5); return m })(),
     pines.map(t => ({ ...t, ry: t.z * 0.07 + t.x * 0.11 + 9.4 })), { shadow: false })
+  const psnows = []
+  for (const t of pines) {
+    for (const [py, pr, ph] of [[7.3, 0.5, 0.9], [9.2, 0.4, 0.7], [11.2, 0.3, 0.5]]) {
+      psnows.push({ ...t, ry: t.x * 0.13 + t.z * 0.07 + py, s: t.s * pr * (0.7 + Math.random() * 0.6), sy: t.s * ph })
+    }
+  }
+  instanced(parent, new THREE.ConeGeometry(0.62, 1.1, 10).translate(0, 0.55, 0),
+    (() => { const m = mat("#eef2ec"); windify(m, 0.5); return m })(),
+    psnows.map(p => ({ ...p, sy: p.sy })), { shadow: false })
   }
 
   const stm = SPECIALS.stream
@@ -1774,10 +2070,23 @@ function buildHighlands(parent) {
   const deck = box(7, 0.5, 3, "#8a6a44")
   deck.position.y = 0.8
   br.add(deck)
+  for (let si = 0; si < 8; si++) {
+    const seam = box(0.06, 0.52, 3.02, "#6d4a2f")
+    seam.position.set(-3.05 + si * 0.87, 0.8, 0)
+    br.add(seam)
+  }
   for (const sx of [-3, 3]) {
     const rail = box(0.15, 0.9, 3, "#6d4a2f")
     rail.position.set(sx, 1.5, 0)
     br.add(rail)
+    for (let vz = -1; vz <= 1; vz++) {
+      const post = box(0.14, 1.1, 0.14, "#6d4a2f")
+      post.position.set(sx, 1.35, vz)
+      br.add(post)
+      const fin = new THREE.Mesh(new THREE.SphereGeometry(0.1, 8, 6), mat("#c9a24a"))
+      fin.position.set(sx, 1.95, vz)
+      br.add(fin)
+    }
   }
   br.position.set(stm.x, heightAt(stm.x, stm.z), stm.z)
   br.rotation.y = 1.29
@@ -1788,18 +2097,24 @@ function buildHighlands(parent) {
   const sy = heightAt(smt.x, smt.z)
   for (let i = 0; i < 7; i++) {
     const a = (i / 7) * Math.PI * 2
-    const st = cyl(0.7, 1, 2.6 + Math.random(), "#9b9484", {}, 6)
+    const st = cyl(0.7, 1, 2.6 + Math.random(), "#9b9484", {}, 12)
     st.position.set(smt.x + Math.cos(a) * 5, sy + 1.2, smt.z + Math.sin(a) * 5)
     st.rotation.z = (Math.random() - 0.5) * 0.15
     st.castShadow = true
     parent.add(st)
+    if (i % 2 === 0) {
+      const rune = box(0.5, 0.5, 0.06, "#7a5aa0", { emissive: "#5a3f88", emissiveIntensity: 0.5 })
+      rune.position.set(smt.x + Math.cos(a) * 5, sy + 2.2, smt.z + Math.sin(a) * 5)
+      rune.lookAt(smt.x, sy + 2.2, smt.z)
+      parent.add(rune)
+    }
   }
   const altar = cyl(1.6, 2, 0.8, "#a89e8c", {}, 10)
   altar.position.set(smt.x, sy + 0.4, smt.z)
   parent.add(altar)
 
   const seeds = []
-  for (let i = 0; i < 60; i++) {
+  for (let i = 0; i < 100; i++) {
     seeds.push(new THREE.Vector3(smt.x - 38 + Math.random() * 88, 1 + Math.random() * 5, smt.z - 38 + Math.random() * 88))
   }
   const sg = new THREE.BufferGeometry().setFromPoints(seeds)
@@ -1874,33 +2189,33 @@ function buildProps(parent) {
   instanced(parent, new THREE.DodecahedronGeometry(0.13, 0).translate(0, 0.06, 0), mat("#9a9184"),
     pebbles.map(p => ({ ...p, s: 0.6 + Math.random() * 1.1, sy: 0.45 + Math.random() * 0.5 })), { shadow: false })
 
-  const corn = scatter(150, "plains", 47, 185)
+  const corn = scatter(240, "plains", 47, 185)
   instanced(parent, new THREE.SphereGeometry(0.11, 6, 5).translate(0, 0.42, 0), mat("#5a7fc9"),
     corn.map(p => ({ ...p, s: 0.8 + Math.random() * 0.7 })), { shadow: false })
   instanced(parent, new THREE.SphereGeometry(0.07, 5, 4).translate(0, 0.56, 0), mat("#2a3a6a"),
     corn.map(p => ({ ...p, s: 0.8 + Math.random() * 0.7 })), { shadow: false })
 
-  const rocks = scatter(46, "woods", 45, 190)
-  instanced(parent, new THREE.DodecahedronGeometry(0.9, 0).translate(0, 0.45, 0), mat("#8d8a80"),
+  const rocks = scatter(70, "woods", 45, 190)
+  instanced(parent, new THREE.DodecahedronGeometry(0.9, 1).translate(0, 0.45, 0), mat("#8d8a80"),
     rocks.map(p => ({ ...p, s: 0.7 + Math.random() * 1.3, sy: 0.55 + Math.random() * 0.7 })))
 
-  const logs = scatter(18, "woods", 45, 190)
-  instanced(parent, new THREE.CylinderGeometry(0.42, 0.48, 3.2, 7).rotateZ(Math.PI / 2).translate(0, 0.42, 0), mat("#6b4a30"),
+  const logs = scatter(28, "woods", 45, 190)
+  instanced(parent, new THREE.CylinderGeometry(0.42, 0.48, 3.2, 10).rotateZ(Math.PI / 2).translate(0, 0.42, 0), mat("#6b4a30"),
     logs.map(p => ({ ...p, s: 0.8 + Math.random() * 0.6 })))
 
-  const stumps = scatter(14, "woods", 45, 190)
-  instanced(parent, new THREE.CylinderGeometry(0.5, 0.62, 0.7, 7).translate(0, 0.35, 0), mat("#7a5a3d"), stumps)
+  const stumps = scatter(22, "woods", 45, 190)
+  instanced(parent, new THREE.CylinderGeometry(0.5, 0.62, 0.7, 10).translate(0, 0.35, 0), mat("#7a5a3d"), stumps)
 
-  const ferns = scatter(280, "woods", 45, 190)
+  const ferns = scatter(460, "woods", 45, 190)
   instanced(parent, new THREE.ConeGeometry(0.44, 0.85, 5).translate(0, 0.42, 0),
     (() => { const m = mat("#4e7a44"); windify(m, 0.5); return m })(),
     ferns.map(p => ({ ...p, s: 0.7 + Math.random() * 0.9 })), { shadow: false })
 
-  const bells = scatter(130, "woods", 45, 190)
+  const bells = scatter(220, "woods", 45, 190)
   instanced(parent, new THREE.SphereGeometry(0.1, 5, 4).translate(0, 0.46, 0), mat("#8fa8e0"),
     bells.map(p => ({ ...p, s: 0.8 + Math.random() * 0.6 })), { shadow: false })
 
-  const bushSpots = scatter(70, "plains", 47, 185)
+  const bushSpots = scatter(110, "plains", 47, 185)
   const bushM = ASSETS && ASSETS.model("bush")
   if (bushM) {
     const bf = gltfFit("bush")
@@ -1919,7 +2234,7 @@ function buildProps(parent) {
       bushSpots.map(p => ({ ...p, s: 0.7 + Math.random() * 0.9 })))
   }
 
-  const daisySpots = scatter(120, "plains", 47, 185)
+  const daisySpots = scatter(260, "plains", 47, 185)
   const flowerM = ASSETS && ASSETS.model("flower")
   if (flowerM) {
     const df = gltfFit("flower")
@@ -1937,11 +2252,11 @@ function buildProps(parent) {
       daisySpots.map(p => ({ ...p, s: 0.8 + Math.random() * 0.7 })), { shadow: false })
   }
 
-  const brocks = scatter(40, "highlands", 56, 190)
-  instanced(parent, new THREE.DodecahedronGeometry(1.25, 0).translate(0, 0.6, 0), mat("#9b9484"),
+  const brocks = scatter(62, "highlands", 56, 190)
+  instanced(parent, new THREE.DodecahedronGeometry(1.25, 1).translate(0, 0.6, 0), mat("#9b9484"),
     brocks.map(p => ({ ...p, s: 0.9 + Math.random() * 1.6, sy: 0.7 + Math.random() * 0.6 })))
 
-  const snow = scatter(60, "highlands", 80, 195)
+  const snow = scatter(90, "highlands", 80, 195)
   instanced(parent, new THREE.CircleGeometry(1.7, 7).rotateX(-Math.PI / 2).translate(0, 0.07, 0),
     new THREE.MeshLambertMaterial({ color: "#f2f0ea" }),
     snow.map(p => ({ ...p, s: 0.6 + Math.random() * 1.2 })), { shadow: false })
@@ -1973,9 +2288,9 @@ function buildProps(parent) {
     strut.rotation.z = sx * 0.52
     well.add(strut)
   }
-  for (let ri = 0; ri < 8; ri++) {
-    const ra = (ri / 8) * Math.PI * 2
-    const rimBlock = box(0.34, 0.24, 0.22, "#9b9484")
+  for (let ri = 0; ri < 14; ri++) {
+    const ra = (ri / 14) * Math.PI * 2
+    const rimBlock = box(0.3, 0.24, 0.22, "#9b9484")
     rimBlock.position.set(Math.cos(ra) * 1.55, 1.18, Math.sin(ra) * 1.55)
     rimBlock.rotation.y = -ra
     well.add(rimBlock)
@@ -1986,10 +2301,16 @@ function buildProps(parent) {
   const crankGrip = box(0.32, 0.08, 0.08, "#8a6a44")
   crankGrip.position.set(1.26, 1.97, 0)
   well.add(crankGrip)
-  const wroof = coneTex(1.7, 1, "#7c5637", "shingle", D_shingle, 4)
+  const wroof = coneTex(1.7, 1, "#7c5637", "shingle", D_shingle, 12)
   wroof.position.y = 3.2
   wroof.rotation.y = Math.PI / 4
   well.add(wroof)
+  for (const [wr, wy] of [[1.5, 2.92], [1.2, 3.4]]) {
+    const wr2 = coneTex(wr, 0.55, "#6d4228", "shingle", D_shingle, 12)
+    wr2.position.y = wy
+    wr2.rotation.y = Math.PI / 4
+    well.add(wr2)
+  }
   const axle = cyl(0.07, 0.07, 2.2, "#5d4630", {}, 6)
   axle.rotation.z = Math.PI / 2
   axle.position.y = 2.4
@@ -1997,9 +2318,20 @@ function buildProps(parent) {
   const rope = box(0.04, 0.9, 0.04, "#c9b78e")
   rope.position.set(0, 1.95, 0)
   well.add(rope)
-  const bucket = cyl(0.28, 0.22, 0.32, "#8a6a44", {}, 8)
+  for (let ci = 0; ci < 3; ci++) {
+    const coil = new THREE.Mesh(new THREE.TorusGeometry(0.08, 0.022, 6, 10), mat("#c9b78e"))
+    coil.position.set(-0.45 + ci * 0.12, 2.4, 0)
+    coil.rotation.y = Math.PI / 2
+    well.add(coil)
+  }
+  const bucket = cyl(0.28, 0.22, 0.32, "#8a6a44", {}, 12)
   bucket.position.set(0, 1.42, 0)
   well.add(bucket)
+  for (const by of [1.32, 1.52]) {
+    const band = new THREE.Mesh(new THREE.TorusGeometry(0.245, 0.02, 6, 12).rotateX(Math.PI / 2), mat("#4a3826"))
+    band.position.set(0, by, 0)
+    well.add(band)
+  }
   }
   well.position.set(-6, heightAt(-6, 14), 14)
   well.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true } })
@@ -2020,17 +2352,20 @@ function buildProps(parent) {
         b.position.y = f ? -f.minY * s : 0
         brl.add(b)
       } else {
-      const body = cyl(0.5, 0.55, 1.1, "#8a6a44", {}, 10)
+      const body = cyl(0.5, 0.55, 1.1, "#8a6a44", {}, 16)
       body.position.y = 0.55
       brl.add(body)
-      for (const by of [0.25, 0.85]) {
-        const band = new THREE.Mesh(new THREE.TorusGeometry(0.53, 0.035, 6, 12).rotateX(Math.PI / 2), bandMat)
+      for (const by of [0.18, 0.55, 0.92]) {
+        const band = new THREE.Mesh(new THREE.TorusGeometry(0.53, 0.035, 6, 14).rotateX(Math.PI / 2), bandMat)
         band.position.y = by
         brl.add(band)
       }
-      const nStaves = 2 + Math.floor(Math.random() * 2)
+      const bung = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 6), mat("#3a2c1c"))
+      bung.position.set(0.52, 0.68, 0.1)
+      brl.add(bung)
+      const nStaves = 8
       for (let si = 0; si < nStaves; si++) {
-        const sa = si * 2.1 + k * 0.9
+        const sa = si * 0.785 + k * 0.3
         const stave = box(0.09, 1.06, 0.035, "#7a5c3a")
         stave.position.set(Math.cos(sa) * 0.53, 0.55, Math.sin(sa) * 0.53)
         stave.rotation.y = Math.PI / 2 - sa
@@ -2098,7 +2433,7 @@ function buildSiteMarkers(parent) {
 
 function buildCoins(parent) {
   coinsGroup = new THREE.Group()
-  const geo = new THREE.CylinderGeometry(0.42, 0.42, 0.09, 14)
+  const geo = new THREE.CylinderGeometry(0.42, 0.42, 0.09, 28)
   geo.rotateX(Math.PI / 2)
   const cmat = new THREE.MeshStandardMaterial({ color: "#f0c34e", metalness: 1.0, roughness: 0.18, envMapIntensity: 1.6, emissive: "#a97b1e", emissiveIntensity: 0.55 })
   anims.coinMat = cmat
@@ -2128,7 +2463,7 @@ function buildCoins(parent) {
 
 function buildAmbient(parent) {
   const birdMats = [new THREE.MeshBasicMaterial({ color: "#3a3328", side: THREE.DoubleSide }), new THREE.MeshBasicMaterial({ color: "#5c5240", side: THREE.DoubleSide })]
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < 14; i++) {
     const b = new THREE.Group()
     const wm = birdMats[i % 2]
     const s = 0.7 + Math.random() * 0.7

@@ -6,5 +6,9 @@
   "assets": {
     "directory": "./dist",
     "not_found_handling": "single-page-application"
+  },
+  "vars": {
+    "AI_BASE_URL": "https://api.cheaperinference.com/v1",
+    "AI_MODEL": "deepseek-v4-flash-0731"
   }
 }

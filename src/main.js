@@ -33,6 +33,9 @@ window.addEventListener("fallback-begin", () => {
 });
 
 const canvas = $("game")
+let qualityTier = 2
+let worldBuilt = false
+let qualityProbeStarted = false
 let renderer
 try {
   renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" })
@@ -41,12 +44,23 @@ try {
   throw e;
 }
 renderer.setSize(innerWidth, innerHeight)
-renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5))
+qualityTier = detectSoftwareGPU() ? 1 : 2
+renderer.setPixelRatio(Math.min(devicePixelRatio, qualityTier >= 2 ? 2 : 1.25))
 renderer.shadowMap.enabled = true
+renderer.shadowMap.autoUpdate = true
 renderer.shadowMap.type = THREE.PCFSoftShadowMap
 renderer.toneMapping = THREE.ACESFilmicToneMapping
 renderer.toneMappingExposure = 1.05
 renderer.outputColorSpace = THREE.SRGBColorSpace
+
+function detectSoftwareGPU() {
+  try {
+    const gl = renderer.getContext()
+    const ext = gl.getExtension("WEBGL_debug_renderer_info")
+    const gpu = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : ""
+    return /swiftshader|llvmpipe|softpipe|software|basic render/i.test(gpu)
+  } catch (e) { return false }
+}
 
 const scene = new THREE.Scene()
 scene.fog = new THREE.Fog("#e8d5b5", 110, 520)
@@ -59,7 +73,7 @@ scene.add(hemi)
 const sun = new THREE.DirectionalLight("#ffd9a0", 1.5)
 sun.position.set(-60, 80, 70)
 sun.castShadow = true
-sun.shadow.mapSize.set(2048, 2048)
+sun.shadow.mapSize.set(qualityTier >= 2 ? 4096 : 2048, qualityTier >= 2 ? 4096 : 2048)
 sun.shadow.camera.left = -45
 sun.shadow.camera.right = 45
 sun.shadow.camera.top = 45
@@ -139,7 +153,10 @@ composer.addPass(new ShaderPass(GradeShader))
   }
   let lateAssets = null
   const assetsPromise = initAssets(renderer, onProgress)
-  assetsPromise.then((a) => { lateAssets = a }).catch(() => {})
+  assetsPromise.then((a) => {
+    lateAssets = a
+    if (worldBuilt) applyAnisotropy(scene, renderer)
+  }).catch(() => {})
   let raced = null
   try {
     raced = await Promise.race([assetsPromise, new Promise((res) => setTimeout(() => res(null), 15000))])
@@ -170,6 +187,8 @@ composer.addPass(new ShaderPass(GradeShader))
   }
 
   const world = buildWorld(scene, A)
+  applyAnisotropy(scene, renderer)
+  worldBuilt = true
   const fx = new FX(scene)
   const player = new Player(scene, camera, fx, A)
   const enemyMgr = new EnemyManager(scene, fx, {
@@ -836,9 +855,105 @@ window.addEventListener("resize", () => {
   smaa.setSize(innerWidth * rpr, innerHeight * rpr)
 })
 
+function applyAnisotropy(root, rnd) {
+  if (!root || !rnd) return
+  const max = Math.min(8, rnd.capabilities.getMaxAnisotropy())
+  const slots = ["map", "normalMap", "roughnessMap", "metalnessMap", "emissiveMap", "aoMap"]
+  const seen = new Set()
+  root.traverse((o) => {
+    if (!o.isMesh || !o.material) return
+    const mats = Array.isArray(o.material) ? o.material : [o.material]
+    for (const m of mats) {
+      if (!m) continue
+      for (const s of slots) {
+        const t = m[s]
+        if (t && t.isTexture && !seen.has(t) && t.anisotropy < max) {
+          seen.add(t)
+          t.anisotropy = max
+        }
+      }
+    }
+  })
+}
+
+function measureFps(ms = 2000) {
+  return new Promise((resolve) => {
+    let frames = 0
+    let finished = false
+    const start = performance.now()
+    const tick = () => {
+      if (finished) return
+      frames++
+      const elapsed = performance.now() - start
+      if (elapsed >= ms) {
+        finished = true
+        resolve((frames * 1000) / elapsed)
+        return
+      }
+      requestAnimationFrame(tick)
+    }
+    requestAnimationFrame(tick)
+    setTimeout(() => {
+      if (finished) return
+      finished = true
+      resolve((frames * 1000) / Math.max(1, performance.now() - start))
+    }, ms + 500)
+  })
+}
+
+function applyQualityTier(tier) {
+  const dpr = devicePixelRatio || 1
+  if (tier >= 2) {
+    renderer.setPixelRatio(Math.min(dpr, 2))
+    sun.castShadow = true
+    sun.shadow.mapSize.set(4096, 4096)
+  } else if (tier === 1) {
+    renderer.setPixelRatio(Math.min(dpr, 1.25))
+    sun.castShadow = true
+    sun.shadow.mapSize.set(2048, 2048)
+  } else {
+    renderer.setPixelRatio(Math.min(dpr, 1))
+    sun.castShadow = false
+  }
+  if (sun.shadow.map) {
+    sun.shadow.map.dispose()
+    sun.shadow.map = null
+  }
+  camera.aspect = innerWidth / innerHeight
+  camera.updateProjectionMatrix()
+  renderer.setSize(innerWidth, innerHeight)
+  const rpr = renderer.getPixelRatio()
+  composer.setPixelRatio(rpr)
+  composer.setSize(innerWidth, innerHeight)
+  gtao.setSize(innerWidth * rpr, innerHeight * rpr)
+  bloom.setSize(innerWidth * rpr, innerHeight * rpr)
+  smaa.setSize(innerWidth * rpr, innerHeight * rpr)
+}
+
+function scheduleQualityProbe() {
+  if (qualityProbeStarted) return
+  qualityProbeStarted = true
+  try {
+    setTimeout(() => {
+      measureFps(2000).then((fps) => {
+        try {
+          const tier = fps >= 45 ? 2 : fps >= 26 ? 1 : 0
+          if (tier !== qualityTier) {
+            qualityTier = tier
+            applyQualityTier(tier)
+            console.info("[quality] tier " + tier + " (fps " + fps.toFixed(0) + ")")
+          }
+        } catch (e) {}
+      }).catch(() => {})
+    }, 4000)
+  } catch (e) {}
+}
+
   animate()
 
-  window.__game = { player, enemyMgr, scene, fx, composer, assets: A }
+  scheduleQualityProbe()
+
+  window.__game = { player, enemyMgr, scene, fx, composer, assets: A, setQuality: (t) => { qualityTier = t; applyQualityTier(t) } }
   onProgress(1, 1, 1)
   try { if (btnBegin) { btnBegin.disabled = false; btnBegin.classList.remove("disabled") } } catch (e) {}
   try { const lb = $("load-bar"); if (lb) setTimeout(() => lb.classList.add("done"), 600) } catch (e) {}

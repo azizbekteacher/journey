@@ -15,7 +15,7 @@ function box(w, h, d, color, opts = {}) {
   m.castShadow = true
   return m
 }
-function sph(r, color, opts = {}, w = 20, h = 14) {
+function sph(r, color, opts = {}, w = 36, h = 24) {
   const m = new THREE.Mesh(new THREE.SphereGeometry(r, w, h), lam(color, opts))
   m.castShadow = true
   return m
@@ -70,7 +70,7 @@ function hideTex(color, opts = {}) {
   return new THREE.MeshLambertMaterial({ color, map: t, ...opts })
 }
 
-function hsph(r, color, opts = {}, w = 20, h = 14) {
+function hsph(r, color, opts = {}, w = 36, h = 24) {
   const m = new THREE.Mesh(new THREE.SphereGeometry(r, w, h), hideTex(color, opts))
   m.castShadow = true
   return m
@@ -78,7 +78,7 @@ function hsph(r, color, opts = {}, w = 20, h = 14) {
 
 function addClaws(leg, n, cw, ch, color, z = -0.09) {
   for (let k = 0; k < n; k++) {
-    const claw = cn(cw, ch, color, 5)
+    const claw = cn(cw, ch, color, 6)
     claw.position.set((k - (n - 1) / 2) * cw * 2.2, -0.02, z)
     claw.rotation.x = Math.PI - 0.4
     leg.add(claw)
@@ -95,7 +95,7 @@ function addHooves(leg, n, cw, ch, color, z = 0) {
 
 function addRings(g, cx, cy, cz, r, n, color, ry = 0) {
   for (let i = 0; i < n; i++) {
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(r, 0.02, 6, 12).rotateX(Math.PI / 2), lam(color))
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(r, 0.02, 8, 20).rotateX(Math.PI / 2), lam(color))
     ring.position.set(cx, cy - i * 0.08, cz)
     ring.rotation.z = ry
     g.add(ring)
@@ -132,6 +132,9 @@ function buildModel(type) {
       const inner = sph(0.08, "#d8a8b8")
       inner.position.set(sx, 0.95, -0.72)
       g.add(inner)
+      const inner2 = sph(0.05, "#e8c0cc")
+      inner2.position.set(sx, 0.97, -0.69)
+      g.add(inner2)
     }
     const eyeL = sph(0.05, "#c0392b"); eyeL.position.set(-0.14, 0.78, -1.08); g.add(eyeL)
     const eyeR = eyeL.clone(); eyeR.position.x = 0.14; g.add(eyeR)
@@ -140,9 +143,9 @@ function buildModel(type) {
     const nose = sph(0.07, "#7a4a58")
     nose.position.set(0, 0.6, -1.28)
     g.add(nose)
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 4; i++) for (const sx of [-0.05, 0.05]) {
       const spine = cn(0.03, 0.16, "#6f6f78", 6)
-      spine.position.set(0, 1.02 + i * 0.06, 0.1 - i * 0.18)
+      spine.position.set(sx, 1.02 + i * 0.06, 0.1 - i * 0.18 + (sx > 0 ? 0.04 : -0.04))
       spine.rotation.x = 0.2
       g.add(spine)
     }
@@ -150,30 +153,38 @@ function buildModel(type) {
     const tbase = sph(0.07, "#c9a0a8", {}, 10, 8)
     tbase.position.set(0, 0.5, 1.0)
     tail.add(tbase)
-    for (let i = 0; i < 5; i++) {
-      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.055 - i * 0.006, 0.015, 6, 10).rotateX(Math.PI / 2), lam("#b0889a"))
-      ring.position.set(0, 0.5 - i * 0.08, 1.12 + i * 0.12)
+    for (let i = 0; i < 9; i++) {
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.055 - i * 0.0035, 0.013, 6, 12).rotateX(Math.PI / 2), lam("#b0889a"))
+      ring.position.set(0, 0.5 - i * 0.04, 1.12 + i * 0.07)
       ring.rotation.x = 0.3
       tail.add(ring)
     }
     const ttip = sph(0.05, "#c9a0a8", {}, 8, 6)
     ttip.position.set(0, 0.2, 1.7)
     tail.add(ttip)
+    for (let i = 0; i < 3; i++) {
+      const tuftC = cn(0.02, 0.09, "#b0889a", 5)
+      tuftC.position.set((i - 1) * 0.045, 0.14 + (i === 1 ? 0.03 : 0), 1.74 + (i - 1) * 0.02)
+      tuftC.rotation.x = 2.6
+      tuftC.rotation.z = (i - 1) * 0.4
+      tail.add(tuftC)
+    }
     g.add(tail)
     g.userData.tail = tail
-    for (const sx of [-0.2, 0.2]) for (const sz of [0, 0.12]) {
+    for (const sx of [-0.2, 0.2]) for (let k = 0; k < 4; k++) {
       const wh = box(0.18, 0.02, 0.02, "#e8d8d0")
-      wh.position.set(sx, 0.66 + (sz ? 0.04 : 0), -1.2 - sz)
-      wh.rotation.y = sx > 0 ? -0.5 : 0.5
+      wh.position.set(sx, 0.64 + k * 0.035, -1.2 - k * 0.045)
+      wh.rotation.y = (sx > 0 ? -0.5 : 0.5) + (k % 2 ? -0.18 : 0.18)
+      wh.rotation.z = (k - 1.5) * 0.1
       g.add(wh)
     }
-    for (const sx of [-0.24, 0.24]) for (const sy of [0, 0.07]) {
+    for (const sx of [-0.24, 0.24]) for (let k = 0; k < 4; k++) {
       const wh2 = box(0.16, 0.02, 0.02, "#f2e6e0")
-      wh2.position.set(sx, 0.72 + sy, -1.3 - sy * 1.4)
-      wh2.rotation.y = sx > 0 ? -0.7 : 0.7
+      wh2.position.set(sx, 0.72 + k * 0.03, -1.3 - k * 0.04)
+      wh2.rotation.y = (sx > 0 ? -0.7 : 0.7) + (k % 2 ? -0.2 : 0.2)
       g.add(wh2)
     }
-    for (const sx of [-0.05, 0.05]) {
+    for (const sx of [-0.075, -0.025, 0.025, 0.075]) {
       const tooth = cn(0.03, 0.09, "#f5f0e0", 4)
       tooth.position.set(sx, 0.58, -1.24)
       tooth.rotation.x = Math.PI
@@ -188,6 +199,9 @@ function buildModel(type) {
       const paw = box(0.14, 0.06, 0.18, "#5f5f68")
       paw.position.set(0, -0.33, 0.02)
       l.add(paw)
+      const atuft = sph(0.045, "#8d8d95")
+      atuft.position.set(0, -0.26, 0)
+      l.add(atuft)
       addClaws(l, 3, 0.018, 0.06, "#f0e6da")
     })
   } else if (type === "fox") {
@@ -206,6 +220,11 @@ function buildModel(type) {
     chestT.scale.set(1.2, 0.7, 0.8)
     chestT.position.set(0, 0.5, -0.4)
     g.add(chestT)
+    for (const [cx2, cy2, cz2] of [[-0.08, 0.44, -0.44], [0.08, 0.44, -0.44], [0, 0.36, -0.46]]) {
+      const ctuft = sph(0.09, "#f2e6d4")
+      ctuft.position.set(cx2, cy2, cz2)
+      g.add(ctuft)
+    }
     const head = hsph(0.3, "#d97a2e")
     head.position.set(0, 1.0, -0.95)
     g.add(head)
@@ -218,6 +237,22 @@ function buildModel(type) {
     for (const sx of [-0.11, 0.11]) {
       const eye = sph(0.035, "#1a1208"); eye.position.set(sx, 1.08, -1.15); g.add(eye)
       shine(g, sx * 0.7, 1.09, -1.19)
+    }
+    for (const sx of [-0.05, 0.05]) {
+      const fang = cn(0.02, 0.07, "#f5f0e0", 5)
+      fang.position.set(sx, 0.86, -1.3)
+      fang.rotation.x = Math.PI
+      g.add(fang)
+    }
+    for (const sx of [-0.1, 0.1]) {
+      const wh = box(0.14, 0.02, 0.02, "#f2e6e0")
+      wh.position.set(sx, 0.98, -1.3)
+      wh.rotation.y = sx > 0 ? -0.45 : 0.45
+      g.add(wh)
+      const wh2 = box(0.12, 0.02, 0.02, "#f2e6e0")
+      wh2.position.set(sx * 1.1, 0.93, -1.33)
+      wh2.rotation.y = sx > 0 ? -0.7 : 0.7
+      g.add(wh2)
     }
     for (const sx of [-0.15, 0.15]) {
       const ear = new THREE.Mesh(new THREE.ConeGeometry(0.11, 0.3, 7), lam("#b35a1e"))
@@ -232,6 +267,12 @@ function buildModel(type) {
       const fluff = sph(0.1, "#f2e6d4")
       fluff.position.set(sx * 1.6, 0.92, -0.78)
       g.add(fluff)
+      const fluff2 = sph(0.07, "#f2e6d4")
+      fluff2.position.set(sx * 1.85, 1.02, -0.72)
+      g.add(fluff2)
+      const fluff3 = sph(0.05, "#f5ece0")
+      fluff3.position.set(sx * 1.75, 0.82, -0.84)
+      g.add(fluff3)
     }
     const tail = new THREE.Group()
     const t1 = hsph(0.22, "#d97a2e")
@@ -249,7 +290,7 @@ function buildModel(type) {
     const tip = sph(0.14, "#f2e6d4")
     tip.position.set(0, 0.95, 1.85)
     tail.add(tip)
-    for (const zt of [0.78, 1.28]) {
+    for (const zt of [0.78, 1.02, 1.28, 1.52]) {
       const band = sph(0.235, "#f2e6d4")
       band.scale.set(1, 1, 0.3)
       band.position.set(0, 0.95, zt)
@@ -263,6 +304,9 @@ function buildModel(type) {
       const paw = box(0.16, 0.09, 0.22, "#8a4a1e")
       paw.position.set(0, -0.47, 0.02)
       l.add(paw)
+      const atuft = sph(0.05, "#d97a2e")
+      atuft.position.set(0, -0.4, 0)
+      l.add(atuft)
       addClaws(l, 3, 0.016, 0.05, "#f2e6d4")
     })
   } else if (type === "boar") {
@@ -291,18 +335,24 @@ function buildModel(type) {
       tuskRing.rotation.x = 0.3
       g.add(tuskRing)
     }
+    for (const sx of [-0.13, 0.13]) {
+      const ltusk = cn(0.035, 0.18, "#e8dcc8", 6)
+      ltusk.position.set(sx, 0.68, -1.52)
+      ltusk.rotation.x = Math.PI + 0.6
+      g.add(ltusk)
+    }
     const mane = box(0.2, 0.28, 1.1, "#4a3323")
     mane.position.set(0, 1.62, -0.7)
     g.add(mane)
-    for (const bz of [-0.15, 0.35, 0.85]) {
+    for (const [bz, by] of [[-0.15, 1.72], [0.15, 1.7], [0.45, 1.68], [0.75, 1.66], [1.05, 1.64], [1.35, 1.62]]) {
       const br = cn(0.05, 0.28, "#54402c", 6)
-      br.position.set(0, 1.72, bz)
+      br.position.set(0, by, bz)
       br.rotation.x = 0.25
       g.add(br)
     }
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 7; i++) for (const sx of [-0.07, 0.07]) {
       const bristle = cn(0.03, 0.24, "#4a3323", 6)
-      bristle.position.set(0, 1.55 + i * 0.1, -0.9 + i * 0.12)
+      bristle.position.set(sx, 1.55 + i * 0.08, -0.9 + i * 0.1 + (sx > 0 ? 0.05 : -0.05))
       bristle.rotation.x = 0.4
       g.add(bristle)
     }
@@ -326,7 +376,7 @@ function buildModel(type) {
     const buckleH = box(0.14, 0.1, 0.05, "#c9a53f")
     buckleH.position.set(0, 1.45, -1.2)
     g.add(buckleH)
-    for (const [mx, mz] of [[-0.3, -0.2], [0.3, -0.2], [-0.3, -0.9], [0.3, -0.9]]) {
+    for (const [mx, mz] of [[-0.3, -0.2], [0.3, -0.2], [-0.3, -0.9], [0.3, -0.9], [-0.25, 0.4], [0.25, 0.4], [0, 0.05]]) {
       const mud = sph(0.2, "#4a3a2a")
       mud.scale.set(1, 0.4, 0.7)
       mud.position.set(mx, 0.75, mz)
@@ -373,9 +423,9 @@ function buildModel(type) {
     const eyeR = eyeL.clone(); eyeR.position.x = 0.13; g.add(eyeR)
     shine(g, -0.09, 1.43, -1.46)
     shine(g, 0.09, 1.43, -1.46)
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 5; i++) for (const sx of [-0.06, 0.06]) {
       const spike = cn(0.04, 0.22, "#565c66", 6)
-      spike.position.set(0, 1.55 + i * 0.06, -0.35 - i * 0.12)
+      spike.position.set(sx, 1.55 + i * 0.06, -0.35 - i * 0.12 + (sx > 0 ? 0.05 : -0.05))
       spike.rotation.x = 0.3
       g.add(spike)
     }
@@ -383,6 +433,14 @@ function buildModel(type) {
     scar.position.set(-0.12, 1.2, -0.9)
     scar.rotation.y = 0.4
     g.add(scar)
+    const scar2 = box(0.24, 0.03, 0.04, "#c9cdd4")
+    scar2.position.set(-0.06, 1.15, -0.75)
+    scar2.rotation.y = 0.4
+    g.add(scar2)
+    const scar3 = box(0.2, 0.03, 0.04, "#c9cdd4")
+    scar3.position.set(-0.2, 1.05, -0.6)
+    scar3.rotation.y = 0.4
+    g.add(scar3)
     const tail = new THREE.Group()
     const t1 = hsph(0.14, "#5f656e")
     t1.scale.set(1, 1, 1.6)
@@ -392,6 +450,12 @@ function buildModel(type) {
     t2.scale.set(1, 1, 1.3)
     t2.position.set(0, 1.28, 1.6)
     tail.add(t2)
+    const tm1 = sph(0.12, "#5f656e")
+    tm1.position.set(0, 1.24, 1.48)
+    tail.add(tm1)
+    const tm2 = sph(0.1, "#5f656e")
+    tm2.position.set(0, 1.35, 1.68)
+    tail.add(tm2)
     const tailTip = sph(0.09, "#e8e4da")
     tailTip.position.set(0, 1.42, 1.78)
     tail.add(tailTip)
@@ -403,9 +467,15 @@ function buildModel(type) {
       fang.rotation.x = Math.PI
       g.add(fang)
     }
-    for (const sx of [-0.42, 0.42]) {
+    for (const sx of [-0.07, 0.07]) {
+      const lfang = cn(0.02, 0.07, "#f5f0e0", 5)
+      lfang.position.set(sx, 1.1, -1.5)
+      lfang.rotation.x = Math.PI
+      g.add(lfang)
+    }
+    for (const [tx, ty, tz] of [[-0.42, 1.45, -0.15], [0.42, 1.45, -0.15], [-0.5, 1.32, -0.5], [0.5, 1.32, -0.5], [-0.45, 1.05, 0.75], [0.45, 1.05, 0.75]]) {
       const tuft = sph(0.16, "#565c66")
-      tuft.position.set(sx, 1.45, -0.15)
+      tuft.position.set(tx, ty, tz)
       g.add(tuft)
     }
     addLegs(g, legs, [-0.28, 0.28], -0.55, 0.16, 0.75, "#6f757e")
@@ -414,6 +484,9 @@ function buildModel(type) {
       const paw = box(0.2, 0.1, 0.24, "#565c66")
       paw.position.set(0, -0.72, 0.02)
       l.add(paw)
+      const atuft = sph(0.06, "#7d838c")
+      atuft.position.set(0, -0.64, 0)
+      l.add(atuft)
       addClaws(l, 3, 0.02, 0.08, "#e8e4da")
     })
   } else if (type === "bear") {
@@ -448,6 +521,12 @@ function buildModel(type) {
     const brow = box(0.5, 0.08, 0.12, "#4a3323")
     brow.position.set(0, 2.14, -1.26)
     g.add(brow)
+    for (const sx of [-0.2, 0.2]) {
+      const bfur = cn(0.03, 0.12, "#4a3323", 6)
+      bfur.position.set(sx, 2.16, -1.32)
+      bfur.rotation.z = sx > 0 ? -0.5 : 0.5
+      g.add(bfur)
+    }
     const patch = sph(0.5, "#c9a878")
     patch.scale.set(1, 1.15, 0.5)
     patch.position.set(0, 1.15, -0.78)
@@ -456,16 +535,22 @@ function buildModel(type) {
     hump.scale.set(1.2, 0.7, 0.9)
     hump.position.set(0, 2.15, 0.25)
     g.add(hump)
-    for (let i = 0; i < 6; i++) {
+    for (const [hx, hz] of [[-0.14, 0.1], [0.14, 0.1], [-0.14, 0.4], [0.14, 0.4]]) {
+      const htuft = cn(0.035, 0.16, "#4a3323", 6)
+      htuft.position.set(hx, 2.42, hz)
+      htuft.rotation.x = 0.3
+      g.add(htuft)
+    }
+    for (let i = 0; i < 10; i++) {
       const spike = cn(0.05, 0.28, "#4a3323", 6)
-      spike.position.set((i - 2.5) * 0.16, 2.2 + Math.abs(i - 2.5) * 0.08, 0.3)
-      spike.rotation.z = (i - 2.5) * -0.15
+      spike.position.set((i - 4.5) * 0.1, 2.2 + Math.abs(i - 4.5) * 0.07, 0.3)
+      spike.rotation.z = (i - 4.5) * -0.12
       g.add(spike)
     }
     for (const sx of [-0.5, 0.5]) {
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < 6; i++) {
         const furB = cn(0.04, 0.2, "#5d3f2a", 6)
-        furB.position.set(sx, 1.2 + i * 0.12, 0.6 + i * 0.1)
+        furB.position.set(sx, 1.2 + i * 0.055, 0.6 + i * 0.04)
         furB.rotation.x = 0.4
         g.add(furB)
       }
@@ -476,7 +561,10 @@ function buildModel(type) {
       const pad = box(0.34, 0.05, 0.3, "#c9a878")
       pad.position.set(0, -0.72, 0)
       l.add(pad)
-      addClaws(l, 3, 0.035, 0.14, "#e8dcc0")
+      const atuft = sph(0.07, "#7d5a3d")
+      atuft.position.set(0, -0.64, 0)
+      l.add(atuft)
+      addClaws(l, 4, 0.035, 0.14, "#e8dcc0")
     })
   } else if (type === "owl") {
     const body = hsph(0.7, "#8a6a48")
@@ -485,16 +573,21 @@ function buildModel(type) {
     const belly = sph(0.5, "#d9c4a0")
     belly.position.set(0, 0.95, -0.25)
     g.add(belly)
-    for (const fy of [0.75, 1.05, 1.35]) {
+    for (const [vx, vy, vz] of [[-0.16, 0.82, -0.7], [0.14, 0.78, -0.7], [-0.06, 1.02, -0.74], [0.1, 1.1, -0.73]]) {
+      const speck = sph(0.035, "#a8875f")
+      speck.position.set(vx, vy, vz)
+      g.add(speck)
+    }
+    for (const fy of [0.7, 0.93, 1.16, 1.39, 1.62]) {
       const layer = sph(0.62 - (fy - 0.75) * 0.1, "#7d5e3e")
       layer.scale.set(1, 0.35, 1)
       layer.position.set(0, fy, 0.15)
       g.add(layer)
     }
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 8; i++) {
       const flake = box(0.3, 0.02, 0.1, "#6d4f33")
-      flake.position.set((i % 2 ? 0.1 : -0.1), 1.15 + i * 0.09, -0.05)
-      flake.rotation.y = i * 0.5
+      flake.position.set((i % 2 ? 0.1 : -0.1), 1.15 + i * 0.045, -0.05)
+      flake.rotation.y = i * 0.25
       g.add(flake)
     }
     const head = hsph(0.45, "#8a6a48")
@@ -507,6 +600,10 @@ function buildModel(type) {
     discRim.rotation.x = Math.PI / 2
     discRim.position.set(0, 1.88, -0.24)
     g.add(discRim)
+    const discRim2 = new THREE.Mesh(new THREE.TorusGeometry(0.34, 0.02, 8, 24), lam("#5d4530"))
+    discRim2.rotation.x = Math.PI / 2
+    discRim2.position.set(0, 1.88, -0.2)
+    g.add(discRim2)
     for (const sx of [-0.12, 0.12]) {
       const eye = sph(0.1, "#f5d76e"); eye.position.set(sx, 1.95, -0.5); g.add(eye)
       const pupil = sph(0.045, "#1a1208"); pupil.position.set(sx, 1.95, -0.58); g.add(pupil)
@@ -518,6 +615,14 @@ function buildModel(type) {
       const tuft = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.3, 6), lam("#6d4f33"))
       tuft.position.set(sx * 1.6, 2.32, 0)
       g.add(tuft)
+      const tuft2 = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.2, 6), lam("#6d4f33"))
+      tuft2.position.set(sx * 1.9, 2.26, 0.08)
+      tuft2.rotation.z = sx > 0 ? -0.3 : 0.3
+      g.add(tuft2)
+      const tuft3 = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.16, 6), lam("#5d4530"))
+      tuft3.position.set(sx * 1.35, 2.2, -0.08)
+      tuft3.rotation.z = sx > 0 ? 0.25 : -0.25
+      g.add(tuft3)
       const brow = box(0.24, 0.05, 0.08, "#6d4f33")
       brow.position.set(sx, 2.12, -0.42)
       brow.rotation.z = sx > 0 ? -0.25 : 0.25
@@ -545,6 +650,13 @@ function buildModel(type) {
       const v = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.14, 5).rotateZ(Math.PI), lam("#b89872"))
       v.position.set(0, vy, -0.3)
       g.add(v)
+    }
+    for (const [tx2, ty2, ry2] of [[-0.16, 0.92, 0.28], [0, 0.88, 0], [0.16, 0.92, -0.28]]) {
+      const tf = box(0.16, 0.03, 0.55, "#5d4530")
+      tf.position.set(tx2, ty2, 0.62)
+      tf.rotation.y = ry2
+      tf.rotation.x = 0.35
+      g.add(tf)
     }
     g.userData.wings = []
     for (const sx of [-0.72, 0.72]) {
@@ -586,17 +698,35 @@ function buildModel(type) {
     const nose = sph(0.06, "#4a4238")
     nose.position.set(0, 2.36, -1.22)
     g.add(nose)
-    for (const [sx2, sz2] of [[-0.5, 0.3], [0.5, 0.3], [-0.55, -0.5], [0.55, -0.5]]) {
+    for (const [bx, bz, bl] of [[-0.07, -1.08, 0.22], [0.07, -1.08, 0.22], [-0.02, -1.12, 0.3], [0.02, -1.12, 0.3]]) {
+      const strand = cn(0.03, bl, "#e8e2d4", 5)
+      strand.position.set(bx, 2.14 - bl / 2, bz)
+      strand.rotation.x = 0.2
+      g.add(strand)
+    }
+    for (const [sx2, sz2] of [[-0.5, 0.3], [0.5, 0.3], [-0.55, -0.5], [0.55, -0.5], [-0.3, -0.05], [0.3, -0.05], [0, 0.55], [-0.15, 0.3]]) {
       const spot = sph(0.13, "#c9bfa8")
       spot.scale.set(1, 0.6, 1)
       spot.position.set(sx2, 1.5, sz2 + 0.4)
       g.add(spot)
     }
-    for (const [mx, mz] of [[-0.3, 0.5], [0.3, 0.5], [0, -0.2]]) {
+    for (const [mx, mz] of [[-0.3, 0.5], [0.3, 0.5], [0, -0.2], [-0.55, -0.1], [0.55, -0.1], [0, 0.9]]) {
       const moss = sph(0.18, "#5f8a4a")
       moss.scale.set(1, 0.4, 1)
       moss.position.set(mx, 1.75, mz)
       g.add(moss)
+    }
+    for (const [fx, fz] of [[-0.45, 0.2], [0.45, 0.2], [-0.55, -0.35], [0.55, -0.35], [-0.2, 0.75], [0.2, 0.75]]) {
+      const fold = sph(0.14, "#d8d2c2")
+      fold.scale.set(0.7, 1, 0.7)
+      fold.position.set(fx, 0.95, fz)
+      g.add(fold)
+    }
+    for (const sx of [-0.72, 0.72]) {
+      const pad = sph(0.16, "#c9bfa8")
+      pad.scale.set(1, 0.7, 1)
+      pad.position.set(sx, 1.85, -0.35)
+      g.add(pad)
     }
     g.userData.antlers = new THREE.Group()
     for (const sx of [-0.15, 0.15]) {
@@ -613,6 +743,12 @@ function buildModel(type) {
         br2.position.set(sx + sx * (0.24 + b * 0.14), 2.92 + b * 0.16, -0.9)
         br2.rotation.z = sx > 0 ? -1.6 : 1.6
         g.userData.antlers.add(br2)
+      }
+      for (let t = 0; t < 3; t++) {
+        const tip = new THREE.Mesh(new THREE.ConeGeometry(0.018, 0.12, 4), lam("#cfc0a0"))
+        tip.position.set(sx * (2.1 + t * 0.15), 3.62 + t * 0.1, -0.9 + t * 0.05)
+        tip.rotation.z = sx > 0 ? -1.9 : 1.9
+        g.userData.antlers.add(tip)
       }
     }
     g.add(g.userData.antlers)
@@ -644,6 +780,10 @@ function buildModel(type) {
     const ring = new THREE.Mesh(new THREE.TorusGeometry(0.14, 0.035, 8, 14), std("#d9b45b", { emissive: "#8a6a1e", emissiveIntensity: 0.5, metalness: 0.8, roughness: 0.25 }))
     ring.position.set(0, 1.88, -2.42)
     g.add(ring)
+    const ring2 = new THREE.Mesh(new THREE.TorusGeometry(0.09, 0.028, 8, 14), std("#d9b45b", { emissive: "#8a6a1e", emissiveIntensity: 0.5, metalness: 0.8, roughness: 0.25 }))
+    ring2.position.set(0, 1.79, -2.44)
+    ring2.rotation.x = Math.PI / 2.4
+    g.add(ring2)
     for (const sx of [-0.35, 0.35]) {
       const horn = new THREE.Mesh(new THREE.ConeGeometry(0.13, 0.75, 10), std("#e8dcc0", { metalness: 0.7, roughness: 0.3 }))
       horn.position.set(sx * 1.7, 2.55, -1.65)
@@ -653,10 +793,10 @@ function buildModel(type) {
       tipCap.position.set(sx * 2.1, 2.98, -1.7)
       tipCap.rotation.z = sx > 0 ? -0.9 : 0.9
       g.add(tipCap)
-      for (let k = 0; k < 2; k++) {
-        const ridge = new THREE.Mesh(new THREE.TorusGeometry(0.13 - k * 0.025, 0.028, 6, 12).rotateX(Math.PI / 2), std("#c9b898", { metalness: 0.6, roughness: 0.4 }))
+      for (let k = 0; k < 4; k++) {
+        const ridge = new THREE.Mesh(new THREE.TorusGeometry(0.13 - k * 0.02, 0.028, 6, 12).rotateX(Math.PI / 2), std("#c9b898", { metalness: 0.6, roughness: 0.4 }))
         const wrap = new THREE.Group()
-        wrap.position.set(sx * 1.7, 2.55 + k * 0.3, -1.65 - k * 0.06)
+        wrap.position.set(sx * 1.7, 2.55 + k * 0.15, -1.65 - k * 0.03)
         wrap.rotation.z = sx > 0 ? -0.9 : 0.9
         wrap.add(ridge)
         g.add(wrap)
@@ -694,6 +834,12 @@ function buildModel(type) {
       spineP.rotation.x = -0.2
       g.add(spineP)
     }
+    for (const [fx2, fy2, fz2] of [[-0.09, 3.42, -0.7], [0.09, 3.5, -0.52], [-0.09, 3.72, -0.28], [0.09, 3.85, -0.08]]) {
+      const ftuft = cn(0.04, 0.16, "#161311", 6)
+      ftuft.position.set(fx2, fy2, fz2)
+      ftuft.rotation.x = -0.2
+      g.add(ftuft)
+    }
     for (const sx of [-0.6, 0.6]) {
       const skirt = box(0.5, 0.16, 0.3, "#3a3532")
       skirt.position.set(sx, 1.1, 0.4)
@@ -717,6 +863,9 @@ function buildModel(type) {
     addLegs(g, legs, [-0.7, 0.7], 0.9, 0.34, 1.2, "#241f1d")
     legs.forEach(l => {
       addHooves(l, 2, 0.2, 0.14, "#161311")
+      const plate = box(0.3, 0.16, 0.05, "#3a3532")
+      plate.position.set(0, -0.12, 0.17)
+      l.add(plate)
     })
     const tail = new THREE.Group()
     const tbase = box(0.1, 0.9, 0.1, "#241f1d")
@@ -726,6 +875,12 @@ function buildModel(type) {
     const tuft = sph(0.16, "#161311")
     tuft.position.set(0, 1.28, 2.03)
     tail.add(tuft)
+    const tuft2 = sph(0.1, "#161311")
+    tuft2.position.set(0, 1.2, 2.08)
+    tail.add(tuft2)
+    const tuft3 = sph(0.06, "#161311")
+    tuft3.position.set(0, 1.12, 2.12)
+    tail.add(tuft3)
     for (let i = 0; i < 3; i++) {
       const spike = cn(0.03, 0.18, "#161311", 6)
       spike.position.set(0, 1.2 - i * 0.08, 2.1 + i * 0.06)
@@ -740,7 +895,7 @@ function buildModel(type) {
 
 
 function cyl2(rt, rb, h, color) {
-  const m = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, 16), lam(color))
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, 18), lam(color))
   m.castShadow = true
   return m
 }

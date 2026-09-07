@@ -89,16 +89,17 @@ function buildHorse() {
   maneBase.position.set(0, 2.72, -0.62)
   maneBase.rotation.x = -0.5
   g.add(maneBase)
-  for (let i = 0; i < 9; i++) {
-    const strand = box(0.05, 0.92 - i * 0.06, 0.32, i % 2 ? dark : maneC)
-    strand.position.set(i % 2 ? 0.09 : -0.09, 2.6 + i * 0.14, -0.24 - i * 0.16)
-    strand.rotation.x = -0.55 - i * 0.05
+  for (let i = 0; i < 18; i++) {
+    const row = Math.floor(i / 9)
+    const strand = box(0.05, 0.92 - (i % 9) * 0.06, 0.32, i % 2 ? dark : maneC)
+    strand.position.set(i % 2 ? 0.09 : -0.09, 2.6 + (i % 9) * 0.14, -0.24 - (i % 9) * 0.16 - row * 0.07)
+    strand.rotation.x = -0.55 - (i % 9) * 0.05
     strand.rotation.z = i % 2 ? -0.16 : 0.16
     g.add(strand)
   }
-  for (let i = 0; i < 5; i++) {
-    const forelock = box(0.05, 0.4, 0.05, dark)
-    forelock.position.set(i % 2 ? 0.08 : -0.08, 3.28 + i * 0.07, -1.62 - i * 0.03)
+  for (let i = 0; i < 10; i++) {
+    const forelock = box(0.05, 0.4 - (i % 5) * 0.02, 0.05, i % 2 ? maneC : dark)
+    forelock.position.set(i % 2 ? 0.08 : -0.08, 3.28 + (i % 5) * 0.07, -1.62 - (i % 5) * 0.03 - Math.floor(i / 5) * 0.05)
     forelock.rotation.x = 0.55
     g.add(forelock)
   }
@@ -131,6 +132,14 @@ function buildHorse() {
   throat.position.set(0, 2.68, -1.5)
   throat.rotation.x = 0.5
   g.add(throat)
+  const latchA = box(0.32, 0.04, 0.06, dark)
+  latchA.position.set(0, 2.82, -1.52)
+  latchA.rotation.x = 0.5
+  g.add(latchA)
+  const latchB = box(0.3, 0.04, 0.06, dark)
+  latchB.position.set(0, 2.6, -1.66)
+  latchB.rotation.x = 0.5
+  g.add(latchB)
 
   for (const sx of [-0.16, 0.16]) {
     const ear = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.28, 7), lam(furD))
@@ -172,6 +181,10 @@ function buildHorse() {
     headstall.position.set(sx, 3.2, -2.14)
     headstall.rotation.z = sx > 0 ? -0.2 : 0.2
     g.add(headstall)
+    const tassel = new THREE.Mesh(new THREE.ConeGeometry(0.02, 0.08, 6), lam(gold))
+    tassel.rotation.x = Math.PI
+    tassel.position.set(sx, 2.68, -2.27)
+    g.add(tassel)
   }
   for (const sx of [-0.14, 0.14]) {
     const rein = box(0.03, 0.03, 1.6, tack)
@@ -179,10 +192,10 @@ function buildHorse() {
     rein.rotation.x = 0.35
     g.add(rein)
   }
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 10; i++) {
     for (const sx of [-0.13, 0.13]) {
       const link = new THREE.Mesh(new THREE.TorusGeometry(0.025, 0.008, 6, 8), std(gold, { metalness: 0.75, roughness: 0.3 }))
-      link.position.set(sx + (i % 2 ? 0.03 : -0.03), 2.62 - i * 0.05, -0.3 - i * 0.12)
+      link.position.set(sx + (i % 2 ? 0.03 : -0.03), 2.62 - i * 0.026, -0.3 - i * 0.06)
       g.add(link)
     }
   }
@@ -192,15 +205,18 @@ function buildHorse() {
   tbase.scale.set(0.8, 1, 1)
   tbase.position.set(0, 1.55, 1.5)
   tail.add(tbase)
-  for (let i = 0; i < 6; i++) {
-    const strand = box(0.05, 1.1, 0.05, i % 2 ? dark : maneC)
-    strand.position.set(i % 2 ? 0.05 : -0.05, 1.3 - i * 0.07, 1.6 + i * 0.08)
-    strand.rotation.x = 0.25 + i * 0.07
+  for (let i = 0; i < 12; i++) {
+    const strand = box(0.05, 1.1 - (i % 6) * 0.03, 0.05, i % 2 ? dark : maneC)
+    strand.position.set(i % 2 ? 0.05 : -0.05, 1.3 - (i % 6) * 0.07, 1.6 + (i % 6) * 0.08 + Math.floor(i / 6) * 0.05)
+    strand.rotation.x = 0.25 + (i % 6) * 0.07
     tail.add(strand)
   }
   const tuft = sph(0.1, dark, {}, 8, 6)
   tuft.position.set(0, 0.95, 1.88)
   tail.add(tuft)
+  const tuft2 = sph(0.08, maneC, {}, 8, 6)
+  tuft2.position.set(0.04, 0.92, 1.96)
+  tail.add(tuft2)
   g.add(tail)
 
   const blanket = box(1.06, 0.07, 1.3, cloth)
@@ -233,6 +249,13 @@ function buildHorse() {
   const seat = box(0.8, 0.1, 0.9, "#3d2920")
   seat.position.y = 2.52
   g.add(seat)
+  for (let i = 0; i < 4; i++) {
+    for (const sz2 of [0.46, -0.46]) {
+      const stitch = box(0.035, 0.02, 0.02, "#c9b28a")
+      stitch.position.set(-0.3 + i * 0.2, 2.53, sz2)
+      g.add(stitch)
+    }
+  }
   const cantle = box(0.5, 0.36, 0.14, tack)
   cantle.position.set(0, 2.64, 0.48)
   cantle.rotation.x = -0.55
@@ -241,6 +264,14 @@ function buildHorse() {
   pom.position.set(0, 2.6, -0.48)
   pom.rotation.x = 0.55
   g.add(pom)
+  for (const px2 of [-0.16, 0.16]) {
+    const cantleStud = sph(0.02, gold, {}, 8, 6)
+    cantleStud.position.set(px2, 2.74, 0.42)
+    g.add(cantleStud)
+    const pommelStud = sph(0.02, gold, {}, 8, 6)
+    pommelStud.position.set(px2 * 0.9, 2.66, -0.42)
+    g.add(pommelStud)
+  }
   for (const bx of [-0.48, 0.48]) {
     const flap = box(0.09, 0.5, 0.7, cloth)
     flap.position.set(bx, 2.14, 0.12)
@@ -252,6 +283,9 @@ function buildHorse() {
     const sstrap = box(0.03, 0.72, 0.03, tack)
     sstrap.position.set(bx, 2.02, 0.12)
     g.add(sstrap)
+    const sbuckle = box(0.06, 0.06, 0.025, "#8a8f96")
+    sbuckle.position.set(bx, 1.98, 0.135)
+    g.add(sbuckle)
   }
   for (const bz of [-0.75, 0.72]) {
     const girth = box(0.03, 0.5, 0.1, tack)
@@ -262,7 +296,7 @@ function buildHorse() {
   breast.position.set(0, 1.98, -1.05)
   breast.rotation.x = 0.35
   g.add(breast)
-  for (const bx of [-0.18, 0.18]) {
+  for (const bx of [-0.24, -0.08, 0.08, 0.24]) {
     const medal = sph(0.03, gold, {}, 8, 6)
     medal.position.set(bx, 1.9, -1.12)
     g.add(medal)
@@ -292,13 +326,21 @@ function buildHorse() {
     pastern.position.y = -1.26
     pastern.rotation.x = 0.12
     leg.add(pastern)
-    const fuff = sph(0.06, furD, {}, 8, 6)
-    fuff.position.set(0, -0.24, 0.07)
-    pastern.add(fuff)
+    for (const [fx2, fy2, fz2] of [[-0.03, -0.21, 0.06], [0.03, -0.25, 0.06], [0, -0.27, 0.09]]) {
+      const fuff = sph(0.055, furD, {}, 8, 6)
+      fuff.position.set(fx2, fy2, fz2)
+      pastern.add(fuff)
+    }
     const hoof = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.16, 0.28), lam(dark))
     hoof.position.y = -1.42
     hoof.castShadow = true
     leg.add(hoof)
+    for (let ni = 0; ni < 6; ni++) {
+      const na = (ni / 6) * Math.PI * 2 + 0.3
+      const nail = sph(0.012, "#1a120c", {}, 6, 5)
+      nail.position.set(Math.cos(na) * 0.115, 0, Math.sin(na) * 0.125)
+      hoof.add(nail)
+    }
     const shoe = new THREE.Mesh(new THREE.TorusGeometry(0.12, 0.02, 6, 10).rotateX(Math.PI / 2), std("#8a8f96", { metalness: 0.8, roughness: 0.35 }))
     shoe.position.y = -1.5
     leg.add(shoe)
@@ -365,12 +407,23 @@ function buildKnight() {
   const hem = box(0.92, 0.06, 0.52, dark)
   hem.position.y = 1.24
   g.add(hem)
-  for (let i = 0; i < 3; i++) {
-    const lame = box(0.9 - i * 0.1, 0.1, 0.5, i % 2 ? armor : steel)
-    lame.position.set(0, 1.06 - i * 0.13, 0)
+  for (let i = 0; i < 5; i++) {
+    const lame = box(0.9 - i * 0.09, 0.1, 0.5, i % 2 ? armor : steel)
+    lame.position.set(0, 1.06 - i * 0.11, 0)
     lame.rotation.x = 0.06 * (i + 1)
     g.add(lame)
   }
+  const emblemBorder = box(0.17, 0.2, 0.02, gold)
+  emblemBorder.position.set(0, 2.04, 0.34)
+  g.add(emblemBorder)
+  const emblem = box(0.12, 0.14, 0.02, red)
+  emblem.position.set(0, 2.06, 0.37)
+  g.add(emblem)
+  const emblemTip = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.06, 4), lam(goldB))
+  emblemTip.rotation.x = Math.PI
+  emblemTip.rotation.y = Math.PI / 4
+  emblemTip.position.set(0, 1.955, 0.37)
+  g.add(emblemTip)
   const gorget = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.36, 0.24, 18), std(armor, { roughness: 0.35, metalness: 0.55 }))
   gorget.position.y = 2.32
   g.add(gorget)
@@ -388,6 +441,11 @@ function buildKnight() {
     pouch.position.set(-0.3 + i * 0.2, 1.36, 0.3)
     pouch.rotation.z = i % 2 ? -0.2 : 0.2
     g.add(pouch)
+  }
+  for (let i = 0; i < 6; i++) {
+    const bStud = sph(0.022, goldB, {}, 8, 6)
+    bStud.position.set(-0.375 + i * 0.15, 1.45, 0.34)
+    g.add(bStud)
   }
   const tassetL = box(0.28, 0.44, 0.16, armor)
   tassetL.position.set(-0.26, 0.98, -0.02)
@@ -416,6 +474,15 @@ function buildKnight() {
   const helmRim = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.36, 0.08, 18), lam(dark))
   helmRim.position.y = 2.72
   g.add(helmRim)
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2 + 0.8
+    const hRiv = sph(0.02, goldB, {}, 8, 6)
+    hRiv.position.set(Math.cos(a) * 0.37, 2.72, Math.sin(a) * 0.37)
+    g.add(hRiv)
+  }
+  const browRidge = box(0.46, 0.03, 0.1, steel)
+  browRidge.position.set(0, 2.92, -0.33)
+  g.add(browRidge)
   const nasal = box(0.05, 0.42, 0.04, dark)
   nasal.position.set(0, 2.84, -0.35)
   g.add(nasal)
@@ -427,6 +494,9 @@ function buildKnight() {
     cheekG.position.set(sx * 0.27, 2.68, -0.05)
     cheekG.rotation.z = sx > 0 ? -0.12 : 0.12
     g.add(cheekG)
+    const cheekStud = sph(0.02, goldB, {}, 8, 6)
+    cheekStud.position.set(sx * 0.31, 2.72, -0.05)
+    g.add(cheekStud)
   }
   const aventail = box(0.4, 0.3, 0.4, dark)
   aventail.position.set(0, 2.48, 0)
@@ -439,19 +509,21 @@ function buildKnight() {
   g.add(plumeBase)
   const plumeGroup = new THREE.Group()
   plumeGroup.position.set(0, 3.18, 0)
-  for (let i = 0; i < 4; i++) {
-    const pf = new THREE.Mesh(new THREE.ConeGeometry(0.1 - i * 0.015, 0.4, 8), lam(i === 3 ? "#c94a3e" : red))
-    pf.position.set(i * 0.05, i * 0.3, 0)
-    pf.rotation.z = -0.35 - i * 0.2
+  for (let i = 0; i < 8; i++) {
+    const a = i * 0.9
+    const pf = new THREE.Mesh(new THREE.ConeGeometry(0.1 - i * 0.008, 0.42 - i * 0.02, 8), lam(i % 2 ? "#c94a3e" : red))
+    pf.position.set(i * 0.03, i * 0.14, Math.sin(a) * 0.05)
+    pf.rotation.z = -0.35 - i * 0.09
+    pf.rotation.x = Math.cos(a) * 0.2
     plumeGroup.add(pf)
   }
   g.add(plumeGroup)
 
   for (const sx of [-0.58, 0.58]) {
     const pauldron = new THREE.Group()
-    for (let i = 0; i < 3; i++) {
-      const lam2 = new THREE.Mesh(new THREE.SphereGeometry(0.24 - i * 0.05, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2), lam(i % 2 ? armor : steel))
-      lam2.position.y = i * 0.06
+    for (let i = 0; i < 5; i++) {
+      const lam2 = new THREE.Mesh(new THREE.SphereGeometry(0.24 - i * 0.032, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2), lam(i % 2 ? armor : steel))
+      lam2.position.y = i * 0.045
       lam2.scale.z = 1.3
       lam2.castShadow = true
       pauldron.add(lam2)
@@ -461,9 +533,11 @@ function buildKnight() {
     const trim2 = new THREE.Mesh(new THREE.TorusGeometry(0.18, 0.03, 8, 16).rotateX(Math.PI / 2), lam(goldB))
     trim2.position.set(0, 0.08, 0)
     pauldron.add(trim2)
-    const riv = sph(0.025, goldB, {}, 8, 6)
-    riv.position.set(0, 0.02, 0.18)
-    pauldron.add(riv)
+    for (let ri = 0; ri < 3; ri++) {
+      const riv = sph(0.02, goldB, {}, 8, 6)
+      riv.position.set(-0.09 + ri * 0.09, 0.02 + ri * 0.02, 0.18)
+      pauldron.add(riv)
+    }
   }
 
   const armL = box(0.22, 0.42, 0.22, armor)
@@ -482,6 +556,16 @@ function buildKnight() {
   const gauntL = box(0.24, 0.14, 0.26, armor)
   gauntL.position.set(0, -0.76, 0)
   armL.add(gauntL)
+  for (let kn = 0; kn < 4; kn++) {
+    const knStud = sph(0.018, goldB, {}, 8, 6)
+    knStud.position.set(kn % 2 ? 0.055 : -0.055, kn < 2 ? -0.73 : -0.79, -0.14)
+    armL.add(knStud)
+  }
+  for (const cx2 of [-0.08, 0.08]) {
+    const cRiv = sph(0.02, gold, {}, 8, 6)
+    cRiv.position.set(cx2, -0.42, 0.11)
+    armL.add(cRiv)
+  }
   g.add(armL)
   const armR = armL.clone()
   armR.position.x = 0.58
@@ -503,7 +587,10 @@ function buildKnight() {
   const fuller = box(0.02, 1.05, 0.034, "#b6c0ca")
   fuller.geometry.translate(0, 0.62, 0)
   sword.add(fuller)
-  const tip = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.24, 8), std("#e6ebf0", { emissive: "#5a6a78", emissiveIntensity: 0.22, roughness: 0.18, metalness: 0.9 }))
+  const engrave = new THREE.Mesh(new THREE.BoxGeometry(0.01, 1.0, 0.037), std("#7c8b98", { emissive: "#6a7a88", emissiveIntensity: 0.5, roughness: 0.3, metalness: 0.8 }))
+  engrave.geometry.translate(0, 0.6, 0)
+  sword.add(engrave)
+  const tip = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.24, 12), std("#e6ebf0", { emissive: "#5a6a78", emissiveIntensity: 0.22, roughness: 0.18, metalness: 0.9 }))
   tip.position.y = 1.35
   tip.castShadow = true
   sword.add(tip)
@@ -518,18 +605,30 @@ function buildKnight() {
     gFang.rotation.z = gx * 0.9
     sword.add(gFang)
   }
+  for (const gxr of [-0.13, 0.13]) {
+    const gRing = new THREE.Mesh(new THREE.TorusGeometry(0.055, 0.008, 6, 14), std(gold, { roughness: 0.3, metalness: 0.75 }))
+    gRing.rotation.y = Math.PI / 2
+    gRing.position.set(gxr, 0, 0)
+    sword.add(gRing)
+  }
   const grip = box(0.06, 0.24, 0.06, "#5d3a20")
   grip.geometry.translate(0, -0.14, 0)
   sword.add(grip)
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 8; i++) {
     const coil = new THREE.Mesh(new THREE.TorusGeometry(0.05, 0.012, 6, 8), std(gold, { roughness: 0.35, metalness: 0.75 }))
     coil.rotation.x = Math.PI / 2
-    coil.position.set(0, -0.05 - i * 0.06, 0)
+    coil.position.set(0, -0.04 - i * 0.027, 0)
     sword.add(coil)
   }
   const pommel = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.07, 0.09, 10), std(goldB, { roughness: 0.25, metalness: 0.85 }))
   pommel.position.y = -0.28
   sword.add(pommel)
+  for (let pi = 0; pi < 6; pi++) {
+    const pa = (pi / 6) * Math.PI * 2
+    const pStud = sph(0.012, goldB, {}, 6, 5)
+    pStud.position.set(Math.cos(pa) * 0.058, -0.28, Math.sin(pa) * 0.058)
+    sword.add(pStud)
+  }
   const gem = sph(0.035, "#e0483a", { emissive: "#8a1a12", emissiveIntensity: 0.8 }, 8, 6)
   gem.position.y = -0.31
   sword.add(gem)
@@ -551,8 +650,13 @@ function buildKnight() {
   const crossH = box(0.32, 0.07, 0.02, "#f2e6c8")
   crossH.position.set(0, 0, 0.07)
   shield.add(crossH)
-  for (let i = 0; i < 8; i++) {
-    const a = (i / 8) * Math.PI * 2 + 0.2
+  for (const [stx, sty] of [[-0.2, 0.2], [0.2, 0.2], [-0.2, -0.2], [0.2, -0.2]]) {
+    const cornerStud = sph(0.035, goldB, {}, 8, 6)
+    cornerStud.position.set(stx, sty, 0.05)
+    shield.add(cornerStud)
+  }
+  for (let i = 0; i < 16; i++) {
+    const a = (i / 16) * Math.PI * 2 + 0.2
     const riv = sph(0.03, goldB, {}, 8, 6)
     riv.position.set(Math.cos(a) * 0.36, Math.sin(a) * 0.36, 0.045)
     shield.add(riv)
@@ -561,6 +665,9 @@ function buildKnight() {
   shield.add(rim)
   const innerRim = new THREE.Mesh(new THREE.TorusGeometry(0.38, 0.015, 6, 20), std(dark, { roughness: 0.4, metalness: 0.6 }))
   shield.add(innerRim)
+  const innerRing = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.01, 6, 28), std("#2f4a70", { roughness: 0.5, metalness: 0.4 }))
+  innerRing.position.z = 0.038
+  shield.add(innerRing)
   const enarm = box(0.05, 0.24, 0.2, "#6d4a2f")
   enarm.position.set(0, 0.05, -0.1)
   shield.add(enarm)
@@ -571,7 +678,7 @@ function buildKnight() {
   armL.add(shield)
   g.userData.shield = shield
 
-  const cape = new THREE.Mesh(new THREE.PlaneGeometry(0.85, 1.15, 6, 8), lam(red, { side: THREE.DoubleSide }))
+  const cape = new THREE.Mesh(new THREE.PlaneGeometry(0.85, 1.15, 12, 16), lam(red, { side: THREE.DoubleSide }))
   cape.position.set(0, 1.75, 0.31)
   g.add(cape)
   const crest = new THREE.Mesh(new THREE.CircleGeometry(0.16, 16), lam(goldB, { side: THREE.DoubleSide, emissive: "#5d431a", emissiveIntensity: 0.3 }))
@@ -707,9 +814,13 @@ export class Player {
     this.camera = camera
     this.fx = fx
     this.group = new THREE.Group()
-    this.knightGltf = !!(A && A.model("knight"))
+    // Hero stays procedural on purpose: the knight.glb asset is a bare
+    // weaponless mesh (3 flat colors, no armor textures) and its attack clips
+    // scrub poorly. buildKnight() is the intended look — full armor, cape,
+    // sword + shield, and hand-tuned swing/hurt/victory/roll poses.
+    this.knightGltf = false
     this.horseGltf = !!(A && A.model("horse"))
-    this.knight = this.knightGltf ? buildKnightGLTF(A) : buildKnight()
+    this.knight = buildKnight()
     this.horse = this.horseGltf ? buildHorseGLTF(A) : buildHorse()
     this.group.add(this.knight)
     this.group.add(this.horse)
@@ -717,9 +828,11 @@ export class Player {
     scene.add(this.group)
 
     this.knightSeatY = 1.15
-    if (this.knightGltf && this.horseGltf) {
+    if (this.horseGltf) {
+      // GLTF horse is ~3.1u tall (back ~1.9u); scale the pre-GLTF 1.15 seat
+      // (tuned for the ~2.3u procedural horse) to the bigger mount
       const hh = this.horse.userData.gltf.height || 3.1
-      this.knightSeatY = Math.max(0.35, hh * 0.58 - 1.05)
+      this.knightSeatY = Math.max(0.35, hh * 0.48)
     }
 
     this.yaw = 0
