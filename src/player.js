@@ -598,7 +598,7 @@ const KNIGHT_YAW = Math.PI
 const HORSE_YAW = Math.PI
 
 // Box3.setFromObject mis-measures skinned subtrees (double-applies node scale);
-// measure height by pushing only the geometry Y corners through matrixWorld.
+// measure height by pushing geometry bbox corners through matrixWorld instead.
 function measureHeight(root) {
   root.updateMatrixWorld(true)
   let min = Infinity, max = -Infinity
@@ -606,12 +606,15 @@ function measureHeight(root) {
     if ((o.isMesh || o.isSkinnedMesh) && o.geometry) {
       if (!o.geometry.boundingBox) o.geometry.computeBoundingBox()
       const bb = o.geometry.boundingBox
-      const cx = (bb.min.x + bb.max.x) / 2, cz = (bb.min.z + bb.max.z) / 2
-      for (const cy of [bb.min.y, bb.max.y]) {
-        const v = new THREE.Vector3(cx, cy, cz).applyMatrix4(o.matrixWorld)
-        min = Math.min(min, v.y)
-        max = Math.max(max, v.y)
-      }
+      // sample all 8 bbox corners: these rigs rotate -90 deg X (height lives on
+      // geometry Z), so Y-only corners with centered X/Z under-measure height
+      for (const x of [bb.min.x, bb.max.x])
+        for (const y of [bb.min.y, bb.max.y])
+          for (const z of [bb.min.z, bb.max.z]) {
+            const v = new THREE.Vector3(x, y, z).applyMatrix4(o.matrixWorld)
+            min = Math.min(min, v.y)
+            max = Math.max(max, v.y)
+          }
     }
   })
   return { h: Math.max(0.001, max - min), minY: min === Infinity ? 0 : min }
@@ -660,15 +663,24 @@ function buildKnightGLTF(A) {
   inner.add(clone)
   g.add(inner)
   const G = { mixer: new THREE.AnimationMixer(clone), clips: A.clips("knight") || { attacks: [] }, actions: {}, cur: null }
-  // attach procedural sword + shield to hand bones (model ships weaponless)
+  // attach procedural sword + shield to hand bones (model ships weaponless).
+  // Hand bones inherit the armature's 100x node scale, so counter-scale the
+  // attachments back to authored size or they render as colossal props.
   const handR = findBone(clone, 1)
   const handL = findBone(clone, -1)
   const proc = buildKnight()
   const sword = proc.userData.sword
   const shield = proc.userData.shield
-  if (handR) { sword.position.set(0, 0, 0); sword.rotation.set(0, 0, 0); handR.add(sword) }
+  const counterScale = (bone) => {
+    bone.updateWorldMatrix(true, false)
+    const ws = new THREE.Vector3()
+    bone.getWorldScale(ws)
+    const m = Math.max(ws.x, ws.y, ws.z)
+    return m > 0.001 ? 1 / m : 1
+  }
+  if (handR) { sword.position.set(0, 0, 0); sword.rotation.set(0, 0, 0); sword.scale.setScalar(counterScale(handR)); handR.add(sword) }
   else { sword.position.set(0.5, 1.1, -0.2); g.add(sword) }
-  if (handL) { shield.position.set(0, -0.1, 0.12); handL.add(shield) }
+  if (handL) { shield.position.set(0, -0.1, 0.12); shield.scale.setScalar(counterScale(handL)); handL.add(shield) }
   g.userData.gltf = G
   g.userData.parts = null
   return g
