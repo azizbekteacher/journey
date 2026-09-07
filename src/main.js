@@ -36,6 +36,7 @@ const canvas = $("game")
 let qualityTier = 2
 let worldBuilt = false
 let qualityProbeStarted = false
+let softwareGPU = false
 let renderer
 try {
   renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" })
@@ -44,7 +45,8 @@ try {
   throw e;
 }
 renderer.setSize(innerWidth, innerHeight)
-qualityTier = detectSoftwareGPU() ? 1 : 2
+softwareGPU = detectSoftwareGPU()
+qualityTier = softwareGPU ? 1 : 2
 renderer.setPixelRatio(Math.min(devicePixelRatio, qualityTier >= 2 ? 2 : 1.25))
 renderer.shadowMap.enabled = true
 renderer.shadowMap.autoUpdate = true
@@ -68,9 +70,9 @@ scene.fog = new THREE.Fog("#e8d5b5", 110, 520)
 const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 3000)
 camera.position.set(0, 8, 30)
 
-const hemi = new THREE.HemisphereLight("#ffe8c8", "#5a6a4a", 0.7)
+const hemi = new THREE.HemisphereLight("#ffdba0", "#4a5f45", 0.7)
 scene.add(hemi)
-const sun = new THREE.DirectionalLight("#ffd9a0", 1.5)
+const sun = new THREE.DirectionalLight("#ffc078", 1.5)
 sun.position.set(-60, 80, 70)
 sun.castShadow = true
 sun.shadow.mapSize.set(qualityTier >= 2 ? 4096 : 2048, qualityTier >= 2 ? 4096 : 2048)
@@ -103,11 +105,7 @@ gtao.render = (r, wb, rb, dt, ma) => {
   try { _gtaoRender(r, wb, rb, dt, ma) } finally { skyObj.visible = true }
 }
 composer.addPass(gtao)
-// GTAO re-renders the whole scene into its own GBuffer every frame — too heavy
-// for integrated GPUs. Off by default; re-enable in console:
-//   __game.composer.passes.find(p => p.isEnabled)?.constructor // or: passes[1].enabled = true
-gtao.enabled = false
-const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.32, 0.6, 0.85)
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.55, 0.7, 0.75)
 composer.addPass(bloom)
 const _pr = renderer.getPixelRatio()
 const smaa = new SMAAPass(innerWidth * _pr, innerHeight * _pr)
@@ -116,30 +114,45 @@ composer.addPass(new OutputPass())
 const GradeShader = {
   uniforms: {
     tDiffuse: { value: null },
-    uVignette: { value: 0.22 },
+    uVignette: { value: 0.3 },
     uSaturation: { value: 1.06 },
     uLift: { value: new THREE.Vector3(0, 0.005, 0.01) },
-    uGain: { value: new THREE.Vector3(1.03, 1.0, 0.97) }
+    uGain: { value: new THREE.Vector3(1.03, 1.0, 0.97) },
+    uGrain: { value: 0.045 },
+    uCA: { value: 0.0016 },
+    uPosterize: { value: 0.18 },
+    uTime2: { value: 0 }
   },
   vertexShader: "varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }",
   fragmentShader: `
     uniform sampler2D tDiffuse;
     uniform float uVignette;
     uniform float uSaturation;
+    uniform float uGrain;
+    uniform float uCA;
+    uniform float uPosterize;
+    uniform float uTime2;
     uniform vec3 uLift;
     uniform vec3 uGain;
     varying vec2 vUv;
     void main() {
-      vec4 src = texture2D(tDiffuse, vUv);
-      vec3 col = src.rgb * uGain + uLift;
+      float d = distance(vUv, vec2(0.5));
+      vec2 caOff = (vUv - 0.5) * uCA * d * 2.0;
+      vec3 src = vec3(texture2D(tDiffuse, vUv + caOff).r, texture2D(tDiffuse, vUv).g, texture2D(tDiffuse, vUv - caOff).b);
+      vec3 col = src * uGain + uLift;
       float luma = dot(col, vec3(0.2126, 0.7152, 0.0722));
       col = mix(vec3(luma), col, uSaturation);
-      float d = distance(vUv, vec2(0.5));
+      vec3 q = (floor(col * 5.0) + 0.5) / 5.0;
+      col = mix(col, q, uPosterize * (1.0 - luma * 0.6));
+      float g = fract(sin(dot(vUv * vec2(1613.0, 1913.0) + uTime2, vec2(12.9898, 78.233))) * 43758.5453);
+      col += (g - 0.5) * uGrain * (1.2 - luma);
       col *= 1.0 - uVignette * smoothstep(0.3, 0.78, d);
-      gl_FragColor = vec4(col, src.a);
+      gl_FragColor = vec4(col, 1.0);
     }`
 }
-composer.addPass(new ShaderPass(GradeShader))
+const grade = new ShaderPass(GradeShader)
+composer.addPass(grade)
+gtao.enabled = qualityTier === 2 && !softwareGPU
 
 ;(async function boot() {
   const btnBegin = $("btn-begin")
@@ -165,9 +178,9 @@ composer.addPass(new ShaderPass(GradeShader))
 
   if (A.env) {
     scene.environment = A.env
-    scene.environmentIntensity = 0.85
+    scene.environmentIntensity = 0.7
     hemi.intensity = 0.35
-    sun.intensity = 2.2
+    sun.intensity = 2.35
     scene.userData.useSkyShader = true
     skyObj = new Sky()
     skyObj.scale.setScalar(2000)
@@ -239,6 +252,7 @@ composer.addPass(new ShaderPass(GradeShader))
 player.enemies = enemyMgr.enemies
 enemyMgr.player = player
 enemyMgr.spawnAll()
+stylizeMaterials(scene)
 
 player.onSwingHit = (e, dmg) => {
   if (enemyMgr.hitByPlayer(e, dmg)) hitStopT = dmg > 1 ? 0.09 : 0.055
@@ -734,6 +748,7 @@ function animate() {
   requestAnimationFrame(animate)
   const rawDt = Math.min(clock.getDelta(), 0.05)
   const t = clock.elapsedTime
+  grade.uniforms.uTime2.value = t
   invulnT = Math.max(0, invulnT - rawDt)
   let dt = rawDt * timeScale
   if (hitStopT > 0) { hitStopT -= rawDt; dt = rawDt * 0.06 }
@@ -876,6 +891,28 @@ function applyAnisotropy(root, rnd) {
   })
 }
 
+function stylizeMaterials(root) {
+  if (!root || !root.traverse) return
+  root.traverse((o) => {
+    if (!o.isMesh || !o.material) return
+    const mats = Array.isArray(o.material) ? o.material : [o.material]
+    for (const m of mats) {
+      if (!m || m.userData.rimPatched) continue
+      if (m.isMeshStandardMaterial || m.isMeshLambertMaterial) {
+        m.userData.rimPatched = true
+        if (m.flatShading) continue
+        const prev = m.onBeforeCompile
+        m.onBeforeCompile = (sh, r) => {
+          if (prev) prev(sh, r)
+          if (sh.fragmentShader.includes("#include <opaque_fragment>") && sh.fragmentShader.includes("#include <normal_fragment_begin>") && sh.fragmentShader.includes("vViewPosition")) {
+            sh.fragmentShader = sh.fragmentShader.replace("#include <opaque_fragment>", "vec3 rimDir = normalize(vViewPosition);\nfloat rim = pow(1.0 - saturate(dot(rimDir, normalize(vNormal))), 3.0);\noutgoingLight += vec3(1.0, 0.76, 0.48) * rim * 0.38;\n#include <opaque_fragment>")
+          }
+        }
+      }
+    }
+  })
+}
+
 function measureFps(ms = 2000) {
   return new Promise((resolve) => {
     let frames = 0
@@ -907,14 +944,30 @@ function applyQualityTier(tier) {
     renderer.setPixelRatio(Math.min(dpr, 2))
     sun.castShadow = true
     sun.shadow.mapSize.set(4096, 4096)
+    bloom.strength = 0.55
+    grade.uniforms.uGrain.value = 0.045
+    grade.uniforms.uCA.value = 0.0016
+    grade.uniforms.uPosterize.value = 0.18
+    grade.uniforms.uVignette.value = 0.3
   } else if (tier === 1) {
     renderer.setPixelRatio(Math.min(dpr, 1.25))
     sun.castShadow = true
     sun.shadow.mapSize.set(2048, 2048)
+    bloom.strength = 0.42
+    grade.uniforms.uGrain.value = 0
+    grade.uniforms.uCA.value = 0
+    grade.uniforms.uPosterize.value = 0.12
+    grade.uniforms.uVignette.value = 0.26
   } else {
     renderer.setPixelRatio(Math.min(dpr, 1))
     sun.castShadow = false
+    bloom.strength = 0.32
+    grade.uniforms.uGrain.value = 0
+    grade.uniforms.uCA.value = 0
+    grade.uniforms.uPosterize.value = 0
+    grade.uniforms.uVignette.value = 0.22
   }
+  gtao.enabled = tier === 2 && !softwareGPU
   if (sun.shadow.map) {
     sun.shadow.map.dispose()
     sun.shadow.map = null
@@ -938,6 +991,10 @@ function scheduleQualityProbe() {
       measureFps(2000).then((fps) => {
         try {
           const tier = fps >= 45 ? 2 : fps >= 26 ? 1 : 0
+          if (tier === 2 && gtao.enabled && fps < 45) {
+            gtao.enabled = false
+            console.info("[quality] GTAO off (fps " + fps.toFixed(0) + ")")
+          }
           if (tier !== qualityTier) {
             qualityTier = tier
             applyQualityTier(tier)
@@ -953,7 +1010,8 @@ function scheduleQualityProbe() {
 
   scheduleQualityProbe()
 
-  window.__game = { player, enemyMgr, scene, fx, composer, assets: A, setQuality: (t) => { qualityTier = t; applyQualityTier(t) } }
+  window.__game = { player, enemyMgr, scene, fx, composer, grade, bloom, assets: A, setQuality: (t) => { qualityTier = t; applyQualityTier(t) } }
+  stylizeMaterials(scene)
   onProgress(1, 1, 1)
   try { if (btnBegin) { btnBegin.disabled = false; btnBegin.classList.remove("disabled") } } catch (e) {}
   try { const lb = $("load-bar"); if (lb) setTimeout(() => lb.classList.add("done"), 600) } catch (e) {}

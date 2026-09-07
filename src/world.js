@@ -45,6 +45,7 @@ function plantTreesMerged(parent, spots, name, targetH, sMin = 0.9, sMax = 1.4) 
   const parts = []
   proto.traverse((o) => { if (o.isMesh) parts.push(o) })
   const N = spots.length
+  const tints = spots.map(() => new THREE.Color(1, 1, 1).offsetHSL((Math.random() - 0.5) * 0.05, (Math.random() - 0.5) * 0.3, (Math.random() - 0.5) * 0.22))
   const M = new THREE.Matrix4(), Q = new THREE.Quaternion(), E = new THREE.Euler(), V = new THREE.Vector3(), S = new THREE.Vector3()
   for (const mesh of parts) {
     const geo = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry
@@ -58,7 +59,9 @@ function plantTreesMerged(parent, spots, name, targetH, sMin = 0.9, sMax = 1.4) 
       S.setScalar(s)
       M.compose(V, Q, S).multiply(local)
       im.setMatrixAt(i, M)
+      im.setColorAt(i, tints[i])
     })
+    if (im.instanceColor) im.instanceColor.needsUpdate = true
     im.instanceMatrix.needsUpdate = true
     im.castShadow = true
     im.receiveShadow = true
@@ -187,7 +190,10 @@ export function zoneAt(x, z) {
 }
 
 let windMats = []
-const anims = { banners: [], blades: [], fireflies: null, butterflies: [], birds: [], clouds: [], smokeTimer: 0, fountainTimer: 0, destroying: [], destroySmoke: [] }
+const anims = { banners: [], blades: [], fireflies: null, butterflies: [], birds: [], clouds: [], smokeTimer: 0, fountainTimer: 0, destroying: [], destroySmoke: [], shafts: [], fishRings: [], lanternSprites: [], dustMotes: null, pollen: null, leafEmitters: null }
+let worldScene = null
+const fogTmp = new THREE.Color()
+const ZONE_FOG = { woods: ["#a8c4a0", 0.006], plains: ["#ecd8a8", 0.0035], highlands: ["#c4b4d8", 0.005], village: ["#f2dcb0", 0.004] }
 let coinsGroup = null
 
 export function getCoins() { return coinsGroup }
@@ -436,21 +442,30 @@ function waveNormalTex(seed) {
   t.wrapS = t.wrapT = THREE.RepeatWrapping
   return t
 }
-function waterMat(color) {
+function waterMat(color, opts = {}) {
   if (!waveTexA) { waveTexA = waveNormalTex(1234567); waveTexB = waveNormalTex(7654321) }
+  const foam = opts.foam || 0
+  const center = opts.center || [0, 0]
   const m = new THREE.MeshStandardMaterial({
-    color: "#3f7d9c", transparent: true, opacity: 0.9, roughness: 0.08, metalness: 0.15, envMapIntensity: 1.4
+    color: "#3f7d9c", transparent: true, opacity: 0.9, roughness: 0.08, metalness: 0.15, envMapIntensity: 2.2
   })
   m.onBeforeCompile = (sh) => {
     sh.uniforms.uTime = { value: 0 }
     sh.uniforms.uWaveA = { value: waveTexA }
     sh.uniforms.uWaveB = { value: waveTexB }
-    sh.vertexShader = "uniform float uTime;\nvarying vec2 vWUv; varying vec3 vWNw;\n" + sh.vertexShader
+    sh.uniforms.uFres = { value: new THREE.Color("#cfe8ff") }
+    sh.uniforms.uFoamMode = { value: foam }
+    sh.uniforms.uFoamC = { value: new THREE.Vector2(center[0], center[1]) }
+    sh.uniforms.uFoamR = { value: opts.radius || 0 }
+    sh.uniforms.uFoamW = { value: opts.width || 1 }
+    sh.vertexShader = "uniform float uTime;\nvarying vec2 vWUv; varying vec3 vWNw; varying vec3 vWPos; varying vec2 vLocal;\n" + sh.vertexShader
       .replace("#include <begin_vertex>", `#include <begin_vertex>
         transformed.y += (sin(transformed.x * 0.85 + uTime * 1.8) + cos(transformed.z * 1.05 + uTime * 1.35)) * 0.022;
         vWUv = (modelMatrix * vec4(transformed, 1.0)).xz;
+        vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
+        vLocal = position.xz;
         vWNw = normalize(mat3(modelMatrix) * objectNormal);`)
-    sh.fragmentShader = "uniform float uTime; uniform sampler2D uWaveA; uniform sampler2D uWaveB;\nvarying vec2 vWUv; varying vec3 vWNw;\n" + sh.fragmentShader
+    sh.fragmentShader = "uniform float uTime; uniform sampler2D uWaveA; uniform sampler2D uWaveB; uniform vec3 uFres; uniform float uFoamMode; uniform vec2 uFoamC; uniform float uFoamR; uniform float uFoamW;\nvarying vec2 vWUv; varying vec3 vWNw; varying vec3 vWPos; varying vec2 vLocal;\n" + sh.fragmentShader
       .replace("#include <normal_fragment_maps>", `
         vec2 wUvA = vWUv * 0.24 + vec2(uTime * 0.031, uTime * 0.022);
         vec2 wUvB = vWUv * 0.15 - vec2(uTime * 0.018, uTime * 0.027);
@@ -460,7 +475,25 @@ function waterMat(color) {
         vec3 wNw = normalize(vWNw);
         vec3 wTw = normalize(cross(vec3(0.0, 0.0, 1.0), wNw) + vec3(0.001, 0.0, 0.0));
         vec3 wBw = cross(wNw, wTw);
-        normal = normalize(wTw * wNs.x + wBw * wNs.y + wNw * max(wNs.z, 0.4));`)
+        normal = normalize(wTw * wNs.x + wBw * wNs.y + wNw * max(wNs.z, 0.4));
+        vec3 wVv = normalize(cameraPosition - vWPos);
+        float wFres = pow(1.0 - saturate(dot(wVv, normalize(normal))), 3.0);
+        diffuseColor.rgb = mix(diffuseColor.rgb, uFres * 1.1, wFres * 0.65);
+        float wSpark = pow(texture2D(uWaveB, vWUv * 2.3 + vec2(uTime * 0.05)).r, 3.0);
+        float wGlint = wSpark * (0.25 + wFres * 0.5);
+        if (uFoamMode > 0.5 && uFoamMode < 1.5) {
+          float wD = distance(vWUv, uFoamC);
+          float wBand = smoothstep(uFoamR - 1.3, uFoamR - 0.2, wD) * (1.0 - smoothstep(uFoamR, uFoamR + 0.3, wD));
+          wBand *= 0.5 + 0.5 * sin(uTime * 2.2 + wD * 5.0);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.93, 0.97, 1.0), wBand * 0.75);
+        } else if (uFoamMode > 1.5) {
+          float wE = abs(vLocal.y) / (uFoamW * 0.5);
+          float wBand2 = smoothstep(0.55, 0.86, wE) * (0.5 + 0.5 * sin(uTime * 1.8 + vLocal.x * 0.8)) * step(wE, 1.0);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.93, 0.97, 1.0), wBand2 * 0.5);
+        }`)
+      .replace("#include <opaque_fragment>", `
+        outgoingLight += vec3(1.0, 0.98, 0.9) * wGlint;
+        #include <opaque_fragment>`)
     windMats.push(sh.uniforms.uTime)
   }
   return m
@@ -479,6 +512,39 @@ function tex(name, draw, rep = 3) {
     texCache[name] = t
   }
   return texCache[name]
+}
+let shaftTexCache = null
+function shaftTex() {
+  if (shaftTexCache) return shaftTexCache
+  const cv = document.createElement("canvas")
+  cv.width = 64; cv.height = 256
+  const x = cv.getContext("2d")
+  const g = x.createLinearGradient(0, 0, 0, 256)
+  g.addColorStop(0, "rgba(255,255,255,0)")
+  g.addColorStop(1, "rgba(255,255,255,0.85)")
+  x.fillStyle = g
+  x.fillRect(0, 0, 64, 256)
+  const t = new THREE.CanvasTexture(cv)
+  t.colorSpace = THREE.SRGBColorSpace
+  shaftTexCache = t
+  return t
+}
+let glowSpriteCache = null
+function glowSpriteTex() {
+  if (glowSpriteCache) return glowSpriteCache
+  const cv = document.createElement("canvas")
+  cv.width = 128; cv.height = 128
+  const x = cv.getContext("2d")
+  const g = x.createRadialGradient(64, 64, 4, 64, 64, 64)
+  g.addColorStop(0, "rgba(255,255,255,0.9)")
+  g.addColorStop(0.4, "rgba(255,255,255,0.32)")
+  g.addColorStop(1, "rgba(255,255,255,0)")
+  x.fillStyle = g
+  x.fillRect(0, 0, 128, 128)
+  const t = new THREE.CanvasTexture(cv)
+  t.colorSpace = THREE.SRGBColorSpace
+  glowSpriteCache = t
+  return t
 }
 function boxTex(w, h, d, color, name, draw, opts = {}) {
   const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(color, { map: tex(name, draw), ...opts }))
@@ -586,10 +652,15 @@ const D_timber = (x, s) => {
 
 export function buildWorld(scene, A = null) {
   ASSETS = A || null
+  worldScene = scene
+  scene.fog = new THREE.FogExp2("#f2dcb0", 0.004)
   for (const k of Object.keys(fitCache)) delete fitCache[k]
   grassPts.length = 0
   grassChunks.length = 0
   windMats = []
+  anims.shafts.length = 0
+  anims.fishRings.length = 0
+  anims.lanternSprites.length = 0
   const g = new THREE.Group()
   scene.add(g)
 
@@ -597,6 +668,7 @@ export function buildWorld(scene, A = null) {
   buildSky(scene)
   buildVillage(g)
   buildWoods(g)
+  buildGodRays(g)
   buildPlains(g)
   buildHighlands(g)
   buildPathsDeco(g)
@@ -785,17 +857,23 @@ function buildSky(scene) {
   clx.fillRect(0, 0, 128, 128)
   const clTex = new THREE.CanvasTexture(clCv)
   clTex.colorSpace = THREE.SRGBColorSpace
-  for (let i = 0; i < 20; i++) {
-    const sp = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: clTex, color: "#fff8ec", transparent: true, opacity: 0.4 + Math.random() * 0.22,
-      depthWrite: false, fog: false
-    }))
-    const cs = 60 + Math.random() * 95
-    sp.scale.set(cs, cs * (0.4 + Math.random() * 0.22), 1)
-    sp.position.set((Math.random() - 0.5) * 640, 100 + Math.random() * 85, (Math.random() - 0.5) * 640)
-    sp.userData.spd = 1.5 + Math.random() * 2
-    anims.clouds.push(sp)
-    scene.add(sp)
+  for (let i = 0; i < 14; i++) {
+    const grp = new THREE.Group()
+    const n = 4 + Math.floor(Math.random() * 5)
+    for (let j = 0; j < n; j++) {
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: clTex, color: "#fff8ec", transparent: true, opacity: 0.3 + Math.random() * 0.25,
+        depthWrite: false, fog: false
+      }))
+      const cs = 26 + Math.random() * 38
+      sp.scale.set(cs, cs * (0.55 + Math.random() * 0.3), 1)
+      sp.position.set((Math.random() - 0.5) * 52, (Math.random() - 0.5) * 14, (Math.random() - 0.5) * 52)
+      grp.add(sp)
+    }
+    grp.position.set((Math.random() - 0.5) * 620, 95 + Math.random() * 80, (Math.random() - 0.5) * 620)
+    grp.userData.spd = 1.2 + Math.random() * 2
+    anims.clouds.push(grp)
+    scene.add(grp)
   }
 }
 
@@ -1051,8 +1129,13 @@ function lantern(parent, x, z) {
   const glow = new THREE.PointLight("#ffb35c", 0.5, 14, 2)
   glow.position.copy(bulb.position)
   gr.add(glow)
+  const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowSpriteTex(), color: "#ffcf8a", transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false }))
+  halo.scale.setScalar(2.1)
+  halo.position.copy(bulb.position)
+  gr.add(halo)
   anims.lanterns = anims.lanterns || []
-  anims.lanterns.push({ light: glow, bulb: bulbMat, ph: Math.random() * Math.PI * 2 })
+  anims.lanterns.push({ light: glow, bulb: bulbMat, ph: Math.random() * Math.PI * 2, halo })
+  anims.lanternSprites.push(halo)
   gr.position.set(x, y, z)
   parent.add(gr)
 }
@@ -1218,7 +1301,7 @@ function buildVillage(parent) {
   basin.position.y = 0.5
   basin.castShadow = true; basin.receiveShadow = true
   fountain.add(basin)
-  const water = new THREE.Mesh(new THREE.CircleGeometry(3.1, 24).rotateX(-Math.PI / 2), waterMat("#5fa8c9"))
+  const water = new THREE.Mesh(new THREE.CircleGeometry(3.1, 24).rotateX(-Math.PI / 2), waterMat("#5fa8c9", { foam: 1, center: [0, 8], radius: 3.1 }))
   water.position.y = 0.95
   water.userData.baseY = 0.95
   fountain.add(water)
@@ -1498,6 +1581,21 @@ function scatter(count, zone, minDist = 45, maxDist = 195, near = null, spread =
     if (ok) out.push({ x, z, y: heightAt(x, z) })
   }
   return out
+}
+
+function buildGodRays(parent) {
+  for (const p of scatter(14, "woods", 60, 175)) addShaft(parent, p.x, p.z)
+  for (const [x, z] of [[-38, -34], [34, -30], [-30, 36]]) addShaft(parent, x, z)
+}
+function addShaft(parent, x, z) {
+  const m = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.7, 1.9, 15, 8, 1, true),
+    new THREE.MeshBasicMaterial({ map: shaftTex(), color: "#ffdf9e", transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false })
+  )
+  m.position.set(x, heightAt(x, z) + 7, z)
+  m.rotation.set(0.55, Math.random() * Math.PI * 2, -0.35)
+  anims.shafts.push({ m, ph: Math.random() * Math.PI * 2, base: 0.16 + Math.random() * 0.1 })
+  parent.add(m)
 }
 
 const TREE_NAMES = ["Oak", "Ironwood", "Fallow Elm", "The Old Willow", "Guild Pine", "Sentinel Oak", "The Whispering Birch"]
@@ -1780,6 +1878,7 @@ function buildWoods(parent) {
   heroSpots.forEach((p, i) => {
     heroTree(parent, p.x, p.z, TREE_NAMES[i % TREE_NAMES.length])
   })
+  anims.leafEmitters = heroSpots.map(p => [p.x, p.y + 5, p.z])
   collectGrass(32000, "woods")
 
   const shroomSpots = scatter(100, "woods", 45, 190)
@@ -1802,11 +1901,22 @@ function buildWoods(parent) {
   }
 
   const pond = SPECIALS.pond
-  const pw = new THREE.Mesh(new THREE.CircleGeometry(10.5, 40).rotateX(-Math.PI / 2), waterMat("#4f8fae"))
+  const pw = new THREE.Mesh(new THREE.CircleGeometry(10.5, 40).rotateX(-Math.PI / 2), waterMat("#4f8fae", { foam: 1, center: [pond.x, pond.z], radius: 10.5 }))
   pw.position.set(pond.x, heightAt(pond.x, pond.z) + 0.3, pond.z)
   pw.userData.baseY = pw.position.y
   parent.add(pw)
   anims.pond = pw
+
+  for (let i = 0; i < 3; i++) {
+    const fr = new THREE.Mesh(
+      new THREE.TorusGeometry(0.5, 0.03, 6, 24).rotateX(Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: "#dff4ff", transparent: true, opacity: 0, depthWrite: false })
+    )
+    const fa = Math.random() * Math.PI * 2, frad = 2 + Math.random() * 5
+    fr.position.set(pond.x + Math.cos(fa) * frad, heightAt(pond.x, pond.z) + 0.3, pond.z + Math.sin(fa) * frad)
+    anims.fishRings.push({ m: fr, t: Math.random() * 2.2 })
+    parent.add(fr)
+  }
 
   const lilies = []
   for (let i = 0; i < 6; i++) {
@@ -2059,7 +2169,7 @@ function buildHighlands(parent) {
   }
 
   const stm = SPECIALS.stream
-  const stream = new THREE.Mesh(new THREE.PlaneGeometry(150, 7, 20, 2).rotateX(-Math.PI / 2), waterMat("#6aa5c4"))
+  const stream = new THREE.Mesh(new THREE.PlaneGeometry(150, 7, 20, 2).rotateX(-Math.PI / 2), waterMat("#6aa5c4", { foam: 2, width: 7 }))
   stream.position.set(stm.x, heightAt(stm.x, stm.z) + 0.4, stm.z)
   stream.userData.baseY = stream.position.y
   stream.rotation.z = 0.28
@@ -2476,10 +2586,38 @@ function buildAmbient(parent) {
     anims.birds.push(b)
     parent.add(b)
   }
+
+  const motes = []
+  for (let i = 0; i < 60; i++) {
+    const a = Math.random() * Math.PI * 2, r = 8 + Math.random() * 22
+    const mx = Math.cos(a) * r, mz = 8 + Math.sin(a) * r
+    motes.push(new THREE.Vector3(mx, heightAt(mx, mz) + 0.5 + Math.random() * 5.5, mz))
+  }
+  anims.dustMotes = new THREE.Points(
+    new THREE.BufferGeometry().setFromPoints(motes),
+    new THREE.PointsMaterial({ color: "#ffe8b0", size: 0.12, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false })
+  )
+  anims.dustMotes.userData.base = motes
+  parent.add(anims.dustMotes)
+
+  const pol = scatter(80, "plains", 47, 180)
+  const pbase = pol.map(p => new THREE.Vector3(p.x, p.y + 0.5 + Math.random() * 2, p.z))
+  anims.pollen = new THREE.Points(
+    new THREE.BufferGeometry().setFromPoints(pbase),
+    new THREE.PointsMaterial({ color: "#fff2c0", size: 0.14, transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending, depthWrite: false })
+  )
+  anims.pollen.userData.base = pbase
+  parent.add(anims.pollen)
 }
 
 export function updateWorld(t, dt, fx, playerPos) {
   for (const u of windMats) u.value = t
+  if (worldScene && worldScene.fog && worldScene.fog.isFogExp2 && playerPos && Number.isFinite(playerPos.x) && Number.isFinite(playerPos.z)) {
+    const [fc, fd] = ZONE_FOG[zoneAt(playerPos.x, playerPos.z)] || ZONE_FOG.village
+    const fk = Math.min(1, dt * 1.2)
+    worldScene.fog.color.lerp(fogTmp.set(fc), fk)
+    worldScene.fog.density += (fd - worldScene.fog.density) * fk
+  }
   for (let i = 0; i < grassChunks.length; i++) {
     const ch = grassChunks[i]
     if (playerPos && Number.isFinite(playerPos.x)) {
@@ -2501,6 +2639,7 @@ export function updateWorld(t, dt, fx, playerPos) {
       const fl = 0.42 + Math.sin(t * 7.3 + L.ph) * 0.06 + Math.sin(t * 13.7 + L.ph * 2.1) * 0.04
       L.light.intensity = fl
       L.bulb.emissiveIntensity = 0.9 + fl * 0.8
+      if (L.halo) L.halo.material.opacity = 0.24 + fl * 0.14
     }
   }
   for (const b of anims.banners) {
@@ -2523,6 +2662,10 @@ export function updateWorld(t, dt, fx, playerPos) {
     c.position.x += c.userData.spd * dt
     if (c.position.x > 340) c.position.x = -340
   })
+  for (const s of anims.shafts) {
+    s.m.material.opacity = s.base + Math.sin(t * 0.45 + s.ph) * 0.07
+    s.m.rotation.y += dt * 0.05
+  }
   if (anims.fireflies) {
     anims.fireflies.material.opacity = 0.55 + Math.sin(t * 2.3) * 0.35
     anims.fireflies.material.size = 0.19 + Math.sin(t * 3.1) * 0.06
@@ -2532,6 +2675,32 @@ export function updateWorld(t, dt, fx, playerPos) {
       pos.setXYZ(i, base[i].x + Math.sin(t * 0.9 + i) * 0.8, base[i].y + Math.sin(t * 1.4 + i * 2.3) * 0.5, base[i].z + Math.cos(t * 0.7 + i * 1.7) * 0.8)
     }
     pos.needsUpdate = true
+  }
+  if (anims.dustMotes) {
+    const pos = anims.dustMotes.geometry.attributes.position
+    const base = anims.dustMotes.userData.base
+    for (let i = 0; i < base.length; i++) {
+      pos.setXYZ(i, base[i].x + Math.sin(t * 0.6 + i) * 1.1, base[i].y + Math.sin(t * 0.9 + i * 1.7) * 0.5, base[i].z + Math.cos(t * 0.5 + i * 1.3) * 1.1)
+    }
+    pos.needsUpdate = true
+  }
+  if (anims.pollen) {
+    const pos = anims.pollen.geometry.attributes.position
+    const base = anims.pollen.userData.base
+    for (let i = 0; i < base.length; i++) {
+      pos.setXYZ(i, base[i].x + Math.sin(t * 0.3 + i * 0.7) * 1.6, base[i].y + Math.sin(t * 0.45 + i * 1.1) * 0.7, base[i].z + Math.cos(t * 0.26 + i * 1.9) * 1.6)
+    }
+    pos.needsUpdate = true
+  }
+  if (anims.fishRings && anims.fishRings.length) {
+    const py = anims.pond ? anims.pond.userData.baseY : 0
+    for (const fr of anims.fishRings) {
+      fr.t += dt
+      const k = (fr.t % 2.4) / 2.4
+      fr.m.scale.setScalar(0.3 + k * 1.6)
+      fr.m.material.opacity = (1 - k) * 0.28
+      fr.m.position.y = py + 0.05 + Math.sin(fr.t * 2.1) * 0.02
+    }
   }
   if (anims.seeds) {
     const pos = anims.seeds.geometry.attributes.position
@@ -2609,7 +2778,9 @@ export function updateWorld(t, dt, fx, playerPos) {
   anims.leafTimer = (anims.leafTimer ?? 0) - dt
   if (anims.leafTimer <= 0) {
     anims.leafTimer = 0.28
-    fx.emit(-105 + (Math.random() - 0.5) * 70, 5.5 + Math.random() * 3, 40 + (Math.random() - 0.5) * 60, (Math.random() - 0.5) * 0.6, -0.5, (Math.random() - 0.5) * 0.6, 0.45, 0.62, 0.28, 5, -0.01)
+    const em = anims.leafEmitters && anims.leafEmitters.length ? anims.leafEmitters[Math.floor(Math.random() * anims.leafEmitters.length)] : null
+    if (em) fx.emit(em[0] + (Math.random() - 0.5) * 5, em[1] + Math.random() * 2.5, em[2] + (Math.random() - 0.5) * 5, (Math.random() - 0.5) * 0.6, -0.5, (Math.random() - 0.5) * 0.6, 0.45, 0.62, 0.28, 5, -0.01)
+    else fx.emit(-105 + (Math.random() - 0.5) * 70, 5.5 + Math.random() * 3, 40 + (Math.random() - 0.5) * 60, (Math.random() - 0.5) * 0.6, -0.5, (Math.random() - 0.5) * 0.6, 0.45, 0.62, 0.28, 5, -0.01)
   }
   anims.emberTimer = (anims.emberTimer ?? 0) - dt
   if (anims.emberTimer <= 0 && anims.lanterns && anims.lanterns.length) {
