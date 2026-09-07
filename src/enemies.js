@@ -768,13 +768,45 @@ function buildModelGLTF(type, A) {
   const g = new THREE.Group()
   const clone = A.model(type)
   if (!clone) return buildModel(type)
-  const bb = new THREE.Box3().setFromObject(clone)
-  const h = Math.max(0.001, bb.max.y - bb.min.y)
-  clone.scale.setScalar((PROC_H[type] || 1.8) / h)
-  bb.setFromObject(clone)
-  clone.position.y -= bb.min.y
-  // SkinnedMesh bounding spheres don't follow posed bones — disable culling
-  clone.traverse((o) => { if (o.isMesh) o.frustumCulled = false })
+  // measure via geometry Y corners (Box3 mis-measures skinned subtrees)
+  clone.updateMatrixWorld(true)
+  let ymin = Infinity, ymax = -Infinity
+  clone.traverse((o) => {
+    if ((o.isMesh || o.isSkinnedMesh) && o.geometry) {
+      if (!o.geometry.boundingBox) o.geometry.computeBoundingBox()
+      const bb = o.geometry.boundingBox
+      const cx = (bb.min.x + bb.max.x) / 2, cz = (bb.min.z + bb.max.z) / 2
+      for (const cy of [bb.min.y, bb.max.y]) {
+        const v = new THREE.Vector3(cx, cy, cz).applyMatrix4(o.matrixWorld)
+        ymin = Math.min(ymin, v.y)
+        ymax = Math.max(ymax, v.y)
+      }
+    }
+  })
+  clone.scale.setScalar((PROC_H[type] || 1.8) / Math.max(0.001, ymax - ymin))
+  // re-measure ground offset at the new scale
+  ymin = Infinity
+  clone.traverse((o) => {
+    if ((o.isMesh || o.isSkinnedMesh) && o.geometry) {
+      const bb = o.geometry.boundingBox
+      const cx = (bb.min.x + bb.max.x) / 2, cz = (bb.min.z + bb.max.z) / 2
+      for (const cy of [bb.min.y, bb.max.y]) {
+        const v = new THREE.Vector3(cx, cy, cz).applyMatrix4(o.matrixWorld)
+        ymin = Math.min(ymin, v.y)
+      }
+    }
+  })
+  clone.position.y -= ymin
+  // Quaternius rigs: 0.01-unit geometry + node scale 100. Rebind skin at the
+  // settled transform or ancestor scaling collapses the body to a speck.
+  clone.updateMatrixWorld(true)
+  clone.traverse((o) => {
+    if (o.isSkinnedMesh) {
+      o.skeleton.calculateInverses()
+      o.bind(o.skeleton, o.matrixWorld)
+      o.frustumCulled = false
+    }
+  })
   const inner = new THREE.Group()
   inner.rotation.y = MODEL_YAW[type] ?? Math.PI
   inner.add(clone)

@@ -1,4 +1,4 @@
-import { defineConfig, loadEnv } from 'vite'
+﻿import { defineConfig, loadEnv } from 'vite'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { mkdir, readFile, writeFile, stat } from 'node:fs/promises'
@@ -59,7 +59,7 @@ function queryMap(url) {
 async function vaultMiddleware(req, res, next) {
   const p = req.url.split('?')[0]
   try {
-    // GET /api/vault/status — { ok, vault, files, mtimes }
+    // GET /api/vault/status â€” { ok, vault, files, mtimes }
     if (req.method === 'GET' && p === '/api/vault/status') {
       const mtimes = {}
       for (const f of ALLOWED_FILES) {
@@ -69,7 +69,7 @@ async function vaultMiddleware(req, res, next) {
       return
     }
 
-    // POST /api/vault/upsert — section-level upsert (answers / tips / plans)
+    // POST /api/vault/upsert â€” section-level upsert (answers / tips / plans)
     if (req.method === 'POST' && p === '/api/vault/upsert') {
       let body = ''
       try { body = await readBody(req) } catch (e) { return sendJson(res, 413, { error: String(e.message || e) }) }
@@ -90,7 +90,7 @@ async function vaultMiddleware(req, res, next) {
       return
     }
 
-    // GET /api/vault/file/head?file=… — cheap mtime probe for external-change polling
+    // GET /api/vault/file/head?file=â€¦ â€” cheap mtime probe for external-change polling
     if (req.method === 'GET' && p === '/api/vault/file/head') {
       const file = queryMap(req.url).file
       if (!ALLOWED_FILES.has(file)) throw new Error('file not allowed')
@@ -104,7 +104,7 @@ async function vaultMiddleware(req, res, next) {
       return
     }
 
-    // GET/PUT /api/vault/file?file=… — read whole file / write whole file (Tasks.md)
+    // GET/PUT /api/vault/file?file=â€¦ â€” read whole file / write whole file (Tasks.md)
     if (p === '/api/vault/file') {
       if (req.method === 'GET') {
         const file = queryMap(req.url).file
@@ -162,13 +162,13 @@ function aiMiddleware(AI) {
   return async function (req, res, next) {
     const p = req.url.split('?')[0]
     try {
-      // GET /api/ai/status — { ok, configured, model }
+      // GET /api/ai/status â€” { ok, configured, model }
       if (req.method === 'GET' && p === '/api/ai/status') {
         sendJson(res, 200, { ok: true, configured: !!(AI.key && AI.base && AI.model), model: AI.model || null })
         return
       }
 
-      // POST /api/ai/chat — body { messages:[{role,content}], model? } → OpenAI-compatible SSE stream
+      // POST /api/ai/chat â€” body { messages:[{role,content}], model? } â†’ OpenAI-compatible SSE stream
       if (req.method === 'POST' && p === '/api/ai/chat') {
         if (!AI.key || !AI.base || !AI.model) {
           return sendJson(res, 200, { error: 'AI not configured. Set AI_BASE_URL, AI_API_KEY and AI_MODEL in .env, then restart the dev server.' })
@@ -206,7 +206,7 @@ function aiMiddleware(AI) {
         }
         if (!up.body) return sendJson(res, 502, { error: 'AI upstream returned no body' })
 
-        // Non-streamed request → pass through the upstream JSON response.
+        // Non-streamed request â†’ pass through the upstream JSON response.
         if (!wantStream) {
           const raw = await up.text()
           res.setHeader('Content-Type', 'application/json; charset=utf-8')
@@ -265,7 +265,8 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 3000,
       strictPort: true,
-      host: 'localhost'
+      host: 'localhost',
+      open: false
     },
     build: {
       chunkSizeWarningLimit: 1200

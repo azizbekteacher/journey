@@ -597,12 +597,45 @@ function buildKnight() {
 const KNIGHT_YAW = Math.PI
 const HORSE_YAW = Math.PI
 
+// Box3.setFromObject mis-measures skinned subtrees (double-applies node scale);
+// measure height by pushing only the geometry Y corners through matrixWorld.
+function measureHeight(root) {
+  root.updateMatrixWorld(true)
+  let min = Infinity, max = -Infinity
+  root.traverse((o) => {
+    if ((o.isMesh || o.isSkinnedMesh) && o.geometry) {
+      if (!o.geometry.boundingBox) o.geometry.computeBoundingBox()
+      const bb = o.geometry.boundingBox
+      const cx = (bb.min.x + bb.max.x) / 2, cz = (bb.min.z + bb.max.z) / 2
+      for (const cy of [bb.min.y, bb.max.y]) {
+        const v = new THREE.Vector3(cx, cy, cz).applyMatrix4(o.matrixWorld)
+        min = Math.min(min, v.y)
+        max = Math.max(max, v.y)
+      }
+    }
+  })
+  return { h: Math.max(0.001, max - min), minY: min === Infinity ? 0 : min }
+}
+
 function normalizeGLTF(clone, targetH) {
-  const bb = new THREE.Box3().setFromObject(clone)
-  const h = Math.max(0.001, bb.max.y - bb.min.y)
+  const { h } = measureHeight(clone)
   clone.scale.setScalar(targetH / h)
-  bb.setFromObject(clone)
-  clone.position.y -= bb.min.y
+  const { minY } = measureHeight(clone)
+  clone.position.y -= minY
+}
+
+// Quaternius rigs author 0.01-unit geometry compensated by mesh-node scale 100.
+// Re-skin-bind at the settled transform so IBMs + bindMatrix match the runtime
+// graph; otherwise any ancestor scaling breaks the bind and the body collapses.
+function rebindSkinned(clone) {
+  clone.updateMatrixWorld(true)
+  clone.traverse((o) => {
+    if (o.isSkinnedMesh) {
+      o.skeleton.calculateInverses()
+      o.bind(o.skeleton, o.matrixWorld)
+      o.frustumCulled = false
+    }
+  })
 }
 
 function findBone(root, side) {
@@ -621,8 +654,7 @@ function buildKnightGLTF(A) {
   const g = new THREE.Group()
   const clone = A.model("knight")
   normalizeGLTF(clone, 2.75)
-  // SkinnedMesh bounding spheres don't follow posed bones — disable culling or the body vanishes
-  clone.traverse((o) => { if (o.isMesh) o.frustumCulled = false })
+  rebindSkinned(clone)
   const inner = new THREE.Group()
   inner.rotation.y = Math.PI
   inner.add(clone)
@@ -645,12 +677,8 @@ function buildKnightGLTF(A) {
 function buildHorseGLTF(A) {
   const g = new THREE.Group()
   const clone = A.model("horse")
-  const bb = new THREE.Box3().setFromObject(clone)
-  const h = Math.max(0.001, bb.max.y - bb.min.y)
-  clone.scale.setScalar(3.1 / h)
-  bb.setFromObject(clone)
-  clone.position.y -= bb.min.y
-  clone.traverse((o) => { if (o.isMesh) o.frustumCulled = false })
+  normalizeGLTF(clone, 3.1)
+  rebindSkinned(clone)
   const inner = new THREE.Group()
   inner.rotation.y = HORSE_YAW
   inner.add(clone)

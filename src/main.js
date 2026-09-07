@@ -466,9 +466,18 @@ function showCard(title, tip, ms = 6000) {
   $("coin-tip").textContent = tip
   $("coin-thought").value = ""
   $("coin-card").classList.remove("hidden")
+  // release pointer lock so the cursor can type / click the card
+  try { document.exitPointerLock?.() } catch (e) {}
   clearTimeout(showCard.t)
   showCard.t = setTimeout(() => $("coin-card").classList.add("hidden"), ms)
 }
+
+try {
+  $("coin-close")?.addEventListener("click", () => {
+    clearTimeout(showCard.t)
+    $("coin-card").classList.add("hidden")
+  })
+} catch (e) {}
 
 window.addEventListener("toast", (e) => toast(e.detail))
 
